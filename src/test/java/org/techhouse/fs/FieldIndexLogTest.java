@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
 public class FieldIndexLogTest {
@@ -75,7 +76,7 @@ public class FieldIndexLogTest {
     public void anAppendIsReplayedOverTheBase() throws IOException {
         FieldIndexStore.replaceType(base, log, List.of(entry("alpha", "a", "b"), entry("beta", "c")));
 
-        final var compacted = store.appendIndexLog(DB, COLL, FIELD, "String",
+        final var compacted = append(
                 List.of(change("alpha", List.of(), List.of("a")), change("gamma", List.of("a"), List.of())),
                 List.of(entry("alpha", "b"), entry("beta", "c"), entry("gamma", "a")));
 
@@ -86,8 +87,7 @@ public class FieldIndexLogTest {
 
     @Test
     public void aLogWithNoBaseIsAnIndex() throws IOException {
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("only", List.of("x"), List.of())),
-                List.of(entry("only", "x")));
+        append(List.of(change("only", List.of("x"), List.of())), List.of(entry("only", "x")));
 
         assertFalse(base.exists());
         assertEquals(Map.of("only", Set.of("x")), loaded());
@@ -97,8 +97,7 @@ public class FieldIndexLogTest {
     public void aValueEmptiedByTheLogIsNotLoaded() throws IOException {
         FieldIndexStore.replaceType(base, log, List.of(entry("alpha", "a"), entry("beta", "b")));
 
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("alpha", List.of(), List.of("a"))),
-                List.of(entry("beta", "b")));
+        append(List.of(change("alpha", List.of(), List.of("a"))), List.of(entry("beta", "b")));
 
         assertEquals(Map.of("beta", Set.of("b")), loaded());
     }
@@ -106,8 +105,7 @@ public class FieldIndexLogTest {
     @Test
     public void replayIsIdempotentAfterAKillBetweenACompactionsRenameAndItsLogDelete() throws IOException {
         FieldIndexStore.replaceType(base, log, List.of(entry("alpha", "a"), entry("beta", "b")));
-        store.appendIndexLog(DB, COLL, FIELD, "String",
-                List.of(change("alpha", List.of(), List.of("a")), change("beta", List.of("a"), List.of())),
+        append(List.of(change("alpha", List.of(), List.of("a")), change("beta", List.of("a"), List.of())),
                 List.of(entry("beta", "a", "b")));
         final var logBytes = Files.readAllBytes(log.toPath());
 
@@ -121,12 +119,11 @@ public class FieldIndexLogTest {
     @Test
     public void aListThatEmptiesDeletesBothFiles() throws IOException {
         FieldIndexStore.replaceType(base, log, List.of(entry("alpha", "a")));
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("beta", List.of("b"), List.of())),
-                List.of(entry("alpha", "a"), entry("beta", "b")));
+        append(List.of(change("beta", List.of("b"), List.of())), List.of(entry("alpha", "a"), entry("beta", "b")));
         assertTrue(log.exists());
 
-        assertTrue(store.appendIndexLog(DB, COLL, FIELD, "String",
-                List.of(change("alpha", List.of(), List.of("a")), change("beta", List.of(), List.of("b"))), List.of()));
+        assertTrue(append(List.of(change("alpha", List.of(), List.of("a")), change("beta", List.of(), List.of("b"))),
+                List.of()));
 
         assertFalse(base.exists());
         assertFalse(log.exists());
@@ -135,15 +132,14 @@ public class FieldIndexLogTest {
 
     @Test
     public void aTornLastLogLineIsIgnored() throws IOException {
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("kept", List.of("k"), List.of())),
-                List.of(entry("kept", "k")));
+        append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
         Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn" + Globals.ID_SEPARATOR + "t",
                 StandardCharsets.UTF_8, StandardOpenOption.APPEND);
+        FieldIndexLog.forgetFilesUnder(tmp);
 
         assertEquals(Map.of("kept", Set.of("k")), loaded());
 
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("next", List.of("n"), List.of())),
-                List.of(entry("kept", "k"), entry("next", "n")));
+        append(List.of(change("next", List.of("n"), List.of())), List.of(entry("kept", "k"), entry("next", "n")));
         assertEquals(Map.of("kept", Set.of("k"), "next", Set.of("n")), loaded(),
                 "the next append cuts the torn line instead of joining it");
     }
@@ -175,8 +171,7 @@ public class FieldIndexLogTest {
         while (!compacted) {
             final var value = "value-" + round++;
             survivors.add(entry(value, "id-" + round));
-            compacted = store.appendIndexLog(DB, COLL, FIELD, "String",
-                    List.of(change(value, List.of("id-" + round), List.of())), survivors);
+            compacted = append(List.of(change(value, List.of("id-" + round), List.of())), survivors);
             assertTrue(round < 100_000, "the log never compacted");
         }
 
@@ -189,8 +184,7 @@ public class FieldIndexLogTest {
 
     @Test
     public void dropIndexRemovesTheLogToo() throws IOException {
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("alpha", List.of("a"), List.of())),
-                List.of(entry("alpha", "a")));
+        append(List.of(change("alpha", List.of("a"), List.of())), List.of(entry("alpha", "a")));
 
         assertTrue(store.dropIndex(DB, COLL, FIELD));
 
@@ -199,13 +193,18 @@ public class FieldIndexLogTest {
 
     @Test
     public void aFullBuildDeletesAStaleLog() throws IOException {
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("stale", List.of("s"), List.of())),
-                List.of(entry("stale", "s")));
+        append(List.of(change("stale", List.of("s"), List.of())), List.of(entry("stale", "s")));
 
         store.writeIndexFile(DB, COLL, FIELD, Map.of(String.class, List.of(entry("fresh", "f"))));
 
         assertFalse(log.exists());
         assertEquals(Map.of("fresh", Set.of("f")), loaded());
+    }
+
+    private boolean append(List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors)
+            throws IOException {
+        final var fold = store.appendIndexLog(DB, COLL, FIELD, "String", changes, survivors, 1);
+        return fold == null ? survivors.isEmpty() : store.fold(fold) != PendingFold.Outcome.SKIPPED;
     }
 
     private void appendTo(File target) throws IOException {
@@ -221,6 +220,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_an_append_is_not_forced() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -230,6 +230,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_force_unforced_forces_each_log_once_and_forgets_it() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -241,6 +242,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_an_append_racing_the_force_stays_unforced() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -254,6 +256,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_failed_force_keeps_the_log_unforced() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -268,6 +271,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_deleted_log_is_skipped() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -278,6 +282,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_dropped_folder_forgets_its_logs() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -306,39 +311,122 @@ public class FieldIndexLogTest {
 
     @Test
     public void test_a_known_tail_skips_the_torn_line_check() throws IOException {
-        assertEquals(1, tornLineChecksDuring(() -> store.appendIndexLog(DB, COLL, FIELD, "String",
-                List.of(change("one", List.of("a"), List.of())), List.of(entry("one", "a")))));
+        assertEquals(1, tornLineChecksDuring(
+                () -> append(List.of(change("one", List.of("a"), List.of())), List.of(entry("one", "a")))));
 
-        assertEquals(0, tornLineChecksDuring(() -> store.appendIndexLog(DB, COLL, FIELD, "String",
-                List.of(change("two", List.of("b"), List.of())), List.of(entry("one", "a"), entry("two", "b")))));
+        assertEquals(0, tornLineChecksDuring(() -> append(List.of(change("two", List.of("b"), List.of())),
+                List.of(entry("one", "a"), entry("two", "b")))));
 
         assertEquals(Map.of("one", Set.of("a"), "two", Set.of("b")), loaded());
-        assertEquals(log.length(), PageTails.knownTerminatedLength(log));
     }
 
     @Test
-    public void test_an_externally_changed_log_is_checked_again() throws IOException {
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("kept", List.of("k"), List.of())),
-                List.of(entry("kept", "k")));
+    public void test_a_forgotten_log_is_checked_again() throws IOException {
+        append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
         Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn", StandardCharsets.UTF_8,
                 StandardOpenOption.APPEND);
+        FieldIndexLog.forgetFilesUnder(tmp);
 
-        assertEquals(1, tornLineChecksDuring(() -> store.appendIndexLog(DB, COLL, FIELD, "String",
-                List.of(change("next", List.of("n"), List.of())), List.of(entry("kept", "k"), entry("next", "n")))));
+        assertEquals(1, tornLineChecksDuring(() -> append(List.of(change("next", List.of("n"), List.of())),
+                List.of(entry("kept", "k"), entry("next", "n")))));
 
         assertFalse(Files.readString(log.toPath()).contains("torn"), "the torn line is cut before the append");
         assertEquals(Map.of("kept", Set.of("k"), "next", Set.of("n")), loaded());
     }
 
     @Test
+    public void test_a_failed_append_checks_the_log_again() throws IOException {
+        append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
+        final var kept = Files.readAllBytes(log.toPath());
+        Files.delete(log.toPath());
+        assertTrue(log.mkdir());
+        final var generation = FieldIndexLog.generationOf(log);
+
+        assertThrows(IOException.class, () -> append(List.of(change("lost", List.of("l"), List.of())),
+                List.of(entry("kept", "k"), entry("lost", "l"))));
+
+        assertTrue(FieldIndexLog.generationOf(log) > generation, "a failed append moves the log's generation");
+        assertTrue(log.delete());
+        Files.write(log.toPath(), kept);
+        Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn", StandardCharsets.UTF_8,
+                StandardOpenOption.APPEND);
+        assertEquals(1, tornLineChecksDuring(() -> append(List.of(change("next", List.of("n"), List.of())),
+                List.of(entry("kept", "k"), entry("next", "n")))));
+        assertEquals(Map.of("kept", Set.of("k"), "next", Set.of("n")), loaded());
+    }
+
+    @Test
     public void test_a_folded_log_is_forgotten() throws IOException {
-        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("kept", List.of("k"), List.of())),
-                List.of(entry("kept", "k")));
-        assertTrue(PageTails.knownTerminatedLength(log) > 0);
+        append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
+        final var generation = FieldIndexLog.generationOf(log);
 
         FieldIndexStore.replaceType(base, log, List.of(entry("kept", "k")));
 
         assertFalse(log.exists());
-        assertEquals(-1L, PageTails.knownTerminatedLength(log));
+        assertTrue(FieldIndexLog.generationOf(log) > generation, "a fold moves the log's generation");
+        assertEquals(1, tornLineChecksDuring(() -> append(List.of(change("next", List.of("n"), List.of())),
+                List.of(entry("kept", "k"), entry("next", "n")))));
+    }
+
+    @Test
+    public void test_appends_move_the_stamp_but_not_the_generation() throws IOException {
+        append(List.of(change("one", List.of("a"), List.of())), List.of(entry("one", "a")));
+        final var generation = FieldIndexLog.generationOf(log);
+        final var stamp = FieldIndexLog.stampOf(base);
+
+        append(List.of(change("two", List.of("b"), List.of())), List.of(entry("one", "a"), entry("two", "b")));
+
+        assertEquals(generation, FieldIndexLog.generationOf(log));
+        assertTrue(FieldIndexLog.stampOf(base) > stamp);
+    }
+
+    @Test
+    public void test_a_fresh_folder_forgets_the_remembered_log_lengths() throws IOException {
+        append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
+        Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn", StandardCharsets.UTF_8,
+                StandardOpenOption.APPEND);
+        FileTreeDeleter.forgetWrittenLengthsUnder(tmp);
+
+        assertEquals(1, tornLineChecksDuring(() -> append(List.of(change("next", List.of("n"), List.of())),
+                List.of(entry("kept", "k"), entry("next", "n")))));
+
+        assertFalse(Files.readString(log.toPath()).contains("torn"), "the torn line is cut before the append");
+    }
+
+    private static List<IndexLogChange> paddedChanges(int count) {
+        final var changes = new ArrayList<IndexLogChange>(count);
+        for (var i = 0; i < count; i++) {
+            changes.add(change(i + "p".repeat(1000), List.of("id" + i), List.of()));
+        }
+        return changes;
+    }
+
+    @Test
+    public void test_an_append_reports_the_log_and_base_lengths() throws IOException {
+        FieldIndexStore.replaceType(base, log, List.of(entry("alpha", "a"), entry("beta", "b")));
+
+        final var small = FieldIndexLog.append(base, log, List.of(change("gamma", List.of("c"), List.of())), 1);
+        final var due = FieldIndexLog.append(base, log, paddedChanges(70), 1);
+        final var ceiling = FieldIndexLog.append(base, log, paddedChanges(200), 1);
+
+        assertEquals(log.length(), ceiling.logBytes());
+        assertEquals(base.length(), ceiling.baseBytes());
+        assertTrue(small.logBytes() < due.logBytes());
+        assertTrue(due.due());
+        assertFalse(due.pastResidentCeiling(), "a log between its base and four times it is due but not urgent");
+        assertTrue(ceiling.pastResidentCeiling());
+    }
+
+    @Test
+    public void test_a_log_below_the_threshold_is_not_due() throws IOException {
+        FieldIndexStore.replaceType(base, log, List.of(entry("alpha", "a")));
+
+        final var outcome = FieldIndexLog.append(base, log, paddedChanges(10), 1);
+        final var unchanged = FieldIndexLog.append(base, log, List.of(), 1);
+
+        assertFalse(outcome.due());
+        assertFalse(outcome.pastResidentCeiling());
+        assertEquals(outcome.logBytes(), unchanged.logBytes(), "an empty append reports the remembered length");
+        assertNull(store.appendIndexLog(DB, COLL, FIELD, "String", List.of(), List.of(entry("alpha", "a")), 1));
     }
 }

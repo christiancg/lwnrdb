@@ -1,6 +1,8 @@
 package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.File;
@@ -23,9 +25,34 @@ public class FilePathsMemoTest {
     }
 
     private static String expectedPage(String root, String physicalDatabase, String collection, long page) {
-        return new File(root + Globals.FILE_SEPARATOR + physicalDatabase + Globals.FILE_SEPARATOR + collection
-                + Globals.FILE_SEPARATOR + collection + Globals.FILE_PAGE_SEPARATOR + page + Globals.DB_FILE_EXTENSION)
-                .getPath();
+        return new File(new File(root).getAbsolutePath() + Globals.FILE_SEPARATOR + physicalDatabase
+                + Globals.FILE_SEPARATOR + collection + Globals.FILE_SEPARATOR + collection
+                + Globals.FILE_PAGE_SEPARATOR + page + Globals.DB_FILE_EXTENSION).getPath();
+    }
+
+    @Test
+    public void the_pk_index_file_is_built_once_per_collection_until_forgotten() {
+        final var first = paths.pkIndexFile("shop", "orders");
+        assertSame(first, paths.pkIndexFile("shop", "orders"));
+
+        paths.forgetCollection("shop", "orders");
+        final var rebuilt = paths.pkIndexFile("shop", "orders");
+        assertNotSame(first, rebuilt);
+        assertEquals(first, rebuilt);
+
+        paths.forgetDatabase("shop");
+        assertNotSame(rebuilt, paths.pkIndexFile("shop", "orders"));
+
+        paths.useDbPath("elsewhere");
+        assertEquals(new File("elsewhere").getAbsolutePath(),
+                paths.pkIndexFile("shop", "orders").getParentFile().getParentFile().getParent());
+    }
+
+    @Test
+    public void a_relative_base_path_is_made_absolute_once() {
+        assertEquals(new File(ROOT).getAbsolutePath(), paths.dbPath());
+        final var page = paths.collectionPage("shop", "orders", 1);
+        assertEquals(page.getPath(), page.getAbsolutePath());
     }
 
     @Test
@@ -111,18 +138,34 @@ public class FilePathsMemoTest {
     }
 
     @Test
-    public void past_the_cap_paths_are_still_correct_but_no_longer_remembered() {
+    public void past_the_cap_the_memo_starts_over_and_keeps_remembering() {
         for (var i = 0; i < FilePaths.MAX_REMEMBERED_PREFIXES + 50; i++) {
             final var collection = "c" + i;
             assertEquals(expectedPage(ROOT, "shop", collection, 1),
                     paths.collectionPage("shop", collection, 1).getPath());
         }
 
-        assertEquals(FilePaths.MAX_REMEMBERED_PREFIXES, paths.rememberedPrefixCount());
+        assertEquals(50, paths.rememberedPrefixCount(), "the full generation is dropped and the newest names kept");
         paths.forgetCollection("shop", "c0");
-        assertEquals(FilePaths.MAX_REMEMBERED_PREFIXES - 1, paths.rememberedPrefixCount());
-        paths.collectionPage("shop", "c" + (FilePaths.MAX_REMEMBERED_PREFIXES + 10), 1);
-        assertEquals(FilePaths.MAX_REMEMBERED_PREFIXES, paths.rememberedPrefixCount());
+        assertEquals(50, paths.rememberedPrefixCount(), "a name of the dropped generation is no longer counted");
+        paths.forgetCollection("shop", "c" + (FilePaths.MAX_REMEMBERED_PREFIXES + 10));
+        assertEquals(49, paths.rememberedPrefixCount());
+        assertEquals(expectedPage(ROOT, "shop", "c0", 2), paths.collectionPage("shop", "c0", 2).getPath());
+        assertEquals(50, paths.rememberedPrefixCount());
+    }
+
+    @Test
+    public void a_reset_after_a_database_was_forgotten_keeps_the_count_exact() {
+        paths.collectionPage("shop", "orders", 0);
+        paths.forgetDatabase("shop");
+        paths.forgetDatabase("shop");
+        paths.forgetCollection("shop", "orders");
+
+        assertEquals(0, paths.rememberedPrefixCount());
+        for (var i = 0; i < FilePaths.MAX_REMEMBERED_PREFIXES + 1; i++) {
+            paths.collectionPage("other", "c" + i, 0);
+        }
+        assertEquals(1, paths.rememberedPrefixCount());
     }
 
     @Test

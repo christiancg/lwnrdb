@@ -16,6 +16,7 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
@@ -25,12 +26,13 @@ final class GroupCommit {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Map<String, GroupQueue> queues = new ConcurrentHashMap<>();
+    private static final Logger logger = Logger.logFor(GroupCommit.class);
 
     private enum Acquired {
         HELD, HELD_AFTER_INTERRUPT, WITHDRAWN
     }
 
-    record Eligibility(BooleanSupplier groupable, String id, BooleanSupplier sideEffects) {
+    record Eligibility(BooleanSupplier groupable, String id, BooleanSupplier sideEffects, boolean checksExistence) {
     }
 
     @FunctionalInterface
@@ -52,9 +54,10 @@ final class GroupCommit {
         private final ErrorCode errorCode;
         private final String id;
         private final BooleanSupplier sideEffects;
+        private final boolean checksExistence;
         private final GroupedAttempt attempt;
         private OperationResponse response;
-        private boolean served;
+        private volatile boolean served;
         private Boolean sideEffecting;
 
         GroupedWrite(OperationType type, ErrorCode errorCode, Eligibility eligibility, GroupedAttempt attempt) {
@@ -62,6 +65,7 @@ final class GroupCommit {
             this.errorCode = errorCode;
             this.id = eligibility.id();
             this.sideEffects = eligibility.sideEffects();
+            this.checksExistence = eligibility.checksExistence();
             this.attempt = attempt;
         }
 
@@ -93,11 +97,19 @@ final class GroupCommit {
             return new OperationResponse(type, errorCode);
         }
 
+        OperationResponse unknownOutcome() {
+            return new OperationResponse(type, ErrorCode.WRITE_LOGGED_NOT_APPLIED);
+        }
+
         private boolean sideEffecting() {
             if (sideEffecting == null) {
                 sideEffecting = GroupCommit.sideEffecting(sideEffects);
             }
             return sideEffecting;
+        }
+
+        private boolean sequencedById() {
+            return checksExistence || sideEffecting();
         }
     }
 
@@ -144,7 +156,8 @@ final class GroupCommit {
                 request.get_id() != null ? request.get_id() : objectId,
                 () -> TriggerHelper.firesOnSave(dbName, collName, depth)
                         || BeforeHookContext.hasHooksFor(dbName, collName, EventType.CREATED)
-                        || BeforeHookContext.hasHooksFor(dbName, collName, EventType.UPDATED));
+                        || BeforeHookContext.hasHooksFor(dbName, collName, EventType.UPDATED),
+                request.isFailOnUpdate());
     }
 
     static Eligibility forDelete(DeleteRequest request) {
@@ -153,7 +166,8 @@ final class GroupCommit {
         final var depth = request.getTriggerDepth();
         return new Eligibility(() -> depth == 0, request.get_id(),
                 () -> TriggerHelper.firesOnDelete(dbName, collName, depth)
-                        || BeforeHookContext.hasHooksFor(dbName, collName, EventType.DELETED));
+                        || BeforeHookContext.hasHooksFor(dbName, collName, EventType.DELETED),
+                false);
     }
 
     static OperationResponse run(String dbName, String collName, GroupedWrite write) {
@@ -239,8 +253,11 @@ final class GroupCommit {
                 return write.failure();
             }
             interrupted |= acquired == Acquired.HELD_AFTER_INTERRUPT;
+            final var batch = takeBatch(queue);
             try {
-                GroupedBatch.run(dbName, collName, takeBatch(queue));
+                GroupedBatch.run(dbName, collName, batch);
+            } catch (Throwable thrown) {
+                failUnserved(dbName, collName, batch, thrown);
             } finally {
                 locks.release(dbName, collName);
             }
@@ -248,6 +265,17 @@ final class GroupCommit {
         }
         restoreInterrupt(interrupted);
         return write.response;
+    }
+
+    private static void failUnserved(String dbName, String collName, List<GroupedWrite> batch, Throwable thrown) {
+        GroupedBatch.closeAfterThrow(dbName, collName);
+        for (final var taken : batch) {
+            if (!taken.served) {
+                taken.serve(taken.failure());
+            }
+        }
+        logger.error("A write batch on " + Cache.getCollectionIdentifier(dbName, collName) + " threw; its "
+                + batch.size() + " unanswered write(s) fail", thrown);
     }
 
     private static Acquired acquire(String dbName, String collName, GroupQueue queue, GroupedWrite write) {
@@ -275,7 +303,7 @@ final class GroupCommit {
                 break;
             }
             final var earlier = next.id == null ? null : byId.get(next.id);
-            if (earlier != null && (earlier.sideEffecting() || next.sideEffecting())) {
+            if (earlier != null && (earlier.sequencedById() || next.sequencedById())) {
                 break;
             }
             if (!queue.writes.remove(next)) {

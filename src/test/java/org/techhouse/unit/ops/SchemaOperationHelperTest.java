@@ -1,17 +1,20 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -25,6 +28,7 @@ import org.techhouse.ops.req.GetSchemaRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.resp.GetSchemaResponse;
 import org.techhouse.test.TestGlobals;
+import org.techhouse.test.TestUtils;
 
 public class SchemaOperationHelperTest {
     private static final String SCHEMA = "{\"type\":\"object\",\"required\":[\"_id\"]}";
@@ -74,6 +78,18 @@ public class SchemaOperationHelperTest {
         final var response = processor.processMessage(new GetSchemaRequest(TestGlobals.DB, "missingColl"));
 
         assertEquals(ErrorCode.COLLECTION_NOT_FOUND.getCode(), response.getErrorCode());
+    }
+
+    @Test
+    public void test_get_schema_of_an_unknown_collection_leaves_no_collection_lock() throws Exception {
+        final var ghost = "ghostSchemaColl";
+
+        final var response = processor.processMessage(new GetSchemaRequest(TestGlobals.DB, ghost));
+
+        assertEquals(ErrorCode.COLLECTION_NOT_FOUND.getCode(), response.getErrorCode());
+        final Map<?, ?> locks = TestUtils.getPrivateStaticField(ResourceLocking.class, "locks", Map.class);
+        assertFalse(locks.containsKey(Cache.getCollectionIdentifier(TestGlobals.DB, ghost)),
+                "a name nobody registered must not keep a collection lock after the read hold is released");
     }
 
     @Test

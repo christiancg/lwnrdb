@@ -1,5 +1,7 @@
 package org.techhouse.ops;
 
+import org.techhouse.config.Globals;
+
 public enum ErrorCode {
     // @formatter:off
     VALIDATION_ERROR("400-1", null, OperationStatus.ERROR),
@@ -47,6 +49,11 @@ public enum ErrorCode {
     TOO_MANY_DATABASES("400-41", "The server has the maximum number of databases", OperationStatus.ERROR),
     TOO_MANY_INDEXES_FOR_COLLECTION("400-42", "The collection has the maximum number of indexes",
             OperationStatus.ERROR),
+    INVALID_COMMAND("400-43", "The command is not valid", OperationStatus.ERROR),
+    DELETE_MATCHES_TOO_MANY("400-44", "The delete condition matches more documents than allowed",
+            OperationStatus.ERROR),
+    UPDATE_MATCHES_TOO_MANY("400-45", "The update condition matches more documents than allowed",
+            OperationStatus.ERROR),
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED),
     USER_NO_LONGER_EXISTS("401-2", "User no longer exists", OperationStatus.UNAUTHENTICATED),
     WRONG_CREDENTIALS("401-3", "The user doesn't exist or the wrong credentials have been provided", OperationStatus.ERROR),
@@ -71,6 +78,8 @@ public enum ErrorCode {
     TRIGGER_NOT_FOUND("404-9", "Trigger not found", OperationStatus.NOT_FOUND),
     COLLECTION_NOT_FOUND("404-11", "Collection not found", OperationStatus.NOT_FOUND),
     SCHEMA_NOT_FOUND("404-12", "The collection has no schema", OperationStatus.NOT_FOUND),
+    SNAPSHOT_NOT_FOUND("404-13", "The snapshot does not exist: it was released or expired, or it belongs to another"
+            + " connection", OperationStatus.NOT_FOUND),
     SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
     SCRIPT_CANCELLED("408-2", "Script was cancelled", OperationStatus.ERROR),
     FAULT_NOT_REACHED("408-3", "The armed fault point was not reached in time", OperationStatus.ERROR),
@@ -106,6 +115,9 @@ public enum ErrorCode {
             OperationStatus.ERROR),
     TRANSACTION_IDLE_TIMEOUT("409-16", "The transaction was rolled back after being idle too long",
             OperationStatus.ERROR),
+    SNAPSHOT_ABORTED("409-17", "The snapshot was aborted and holds nothing any more; open a new one",
+            OperationStatus.ERROR),
+    DOCUMENT_ALREADY_EXISTS("409-18", "A document with this _id already exists", OperationStatus.ERROR),
     LISTEN_ENDED("410-1", "The listen ended", OperationStatus.NOT_FOUND),
     OUTBOUND_BACKLOG("413-1", "The connection's outbound buffer overflowed", OperationStatus.ERROR),
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),
@@ -146,6 +158,13 @@ public enum ErrorCode {
     TRANSACTION_HALF_APPLIED("500-33",
             "A committed transaction could not be fully applied; its collections are fenced until it is finished",
             OperationStatus.ERROR),
+    WRITE_LOGGED_NOT_APPLIED("500-34",
+            "The write was logged durably but could not be applied; it is applied before the collection is next used,"
+                    + " or at the next startup, so it may already have taken effect",
+            OperationStatus.ERROR),
+    ERROR_GATHERING_SERVER_INFO("500-35", "Error while gathering server info", OperationStatus.ERROR),
+    ERROR_STARTING_SNAPSHOT("500-36", "Error while opening the snapshot", OperationStatus.ERROR),
+    ERROR_READING_SNAPSHOT("500-37", "Error while reading the snapshot", OperationStatus.ERROR),
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR),
     NO_QUORUM("503-2", "Cluster does not have a write quorum", OperationStatus.ERROR),
     REPLICATION_TIMEOUT("503-3", "Timed out waiting for the replication quorum", OperationStatus.ERROR),
@@ -169,6 +188,18 @@ public enum ErrorCode {
     LISTEN_RETAINED_BYTES_EXHAUSTED("503-15", "The server holds the maximum bytes of listen registrations, retry later",
             OperationStatus.ERROR),
     BACKGROUND_BACKLOG("503-16", "The background index queue is full and nothing was written; retry shortly",
+            OperationStatus.ERROR),
+    RESPONSE_BUDGET_EXHAUSTED("503-17", "The server holds the maximum bytes of unsent responses; retry shortly",
+            OperationStatus.ERROR),
+    COLLECTION_FENCED("503-18", "The collection is held by a committed transaction that has not finished applying;"
+            + " retry shortly", OperationStatus.ERROR),
+    WRITES_NOT_APPLIED("503-19", "The collection holds logged writes that could not be applied yet, so it cannot be"
+            + " read consistently; retry shortly", OperationStatus.ERROR),
+    AGGREGATE_BUDGET_EXHAUSTED("503-20", "The server holds the maximum bytes of running aggregations; retry shortly",
+            OperationStatus.ERROR),
+    TRANSACTION_BUDGET_EXHAUSTED("503-21", "The server holds the maximum bytes of buffered transactions; the write was"
+            + " not buffered, retry shortly", OperationStatus.ERROR),
+    SNAPSHOT_LIMIT_REACHED("503-22", "The server holds the maximum number of open snapshots; retry shortly",
             OperationStatus.ERROR);
     // @formatter:on
 
@@ -192,6 +223,10 @@ public enum ErrorCode {
 
     public OperationStatus getStatus() {
         return status;
+    }
+
+    public boolean isRetryable() {
+        return Globals.RETRYABLE_ERROR_CODES.contains(code);
     }
 
     public static ErrorCode byCode(String code) {

@@ -41,11 +41,26 @@ final class WriteIntentJournal {
     }
 
     Intent begin(String dbName, String collName, List<WriteIntent> items) throws IOException {
+        final var group = new ForceGroup();
+        final var intent = begin(dbName, collName, items, group);
+        try {
+            group.force();
+        } catch (IOException e) {
+            end(intent);
+            throw e;
+        }
+        return intent;
+    }
+
+    Intent begin(String dbName, String collName, List<WriteIntent> items, ForceGroup forcedBy) throws IOException {
         final var log = paths.intentLog(dbName, collName);
         final Intent intent;
         final var lock = FileLocks.lockWrite(log);
         try {
             final var state = stateOf(log);
+            if (log.exists() && ForceFailures.hasFailed(log.toPath())) {
+                compact(log, state);
+            }
             intent = new Intent(log, state.nextSeq, dbName, collName, List.copyOf(items));
             append(log, state, IntentLogCodec.encode(intent));
             state.nextSeq++;
@@ -53,14 +68,7 @@ final class WriteIntentJournal {
         } finally {
             lock.unlock();
         }
-        final var group = new ForceGroup();
-        group.add(log.toPath());
-        try {
-            group.force();
-        } catch (IOException e) {
-            end(intent);
-            throw e;
-        }
+        forcedBy.add(log.toPath());
         return intent;
     }
 

@@ -168,12 +168,12 @@ public class ConfigurationTest {
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
         try (var writer = new BufferedWriter(new FileWriter(newConfigFile, StandardCharsets.UTF_8, true))) {
-            writer.write("maxMemory=512Mb");
+            writer.write("maxMemory=64Mb");
             writer.newLine();
         }
         try {
             final var config = Configuration.getInstance();
-            assertEquals(512L * 1024L * 1024L, config.getMaxMemoryBytes());
+            assertEquals(64L * 1024L * 1024L, config.getMaxMemoryBytes());
             assertFalse(config.isCachingDisabled());
             assertFalse(config.isCacheUnlimited());
         } finally {

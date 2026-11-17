@@ -28,6 +28,7 @@ import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.MapAggregationStep;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
+import org.techhouse.ops.req.validations.RequestValidator;
 
 public class RequestParserTest {
     @Test
@@ -212,6 +213,39 @@ public class RequestParserTest {
     }
 
     @Test
+    public void test_create_index_field_names_parsed() {
+        String msg = """
+                {"type":"CREATE_INDEX","databaseName":"shop","collectionName":"orders","fieldNames":["a","b.c"]}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(CreateIndexRequest.class, result);
+        final var request = (CreateIndexRequest) result;
+        assertEquals(List.of("a", "b.c"), request.getFieldNames());
+        assertEquals(List.of("a", "b.c"), request.targetFieldNames());
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void test_empty_field_names_refused() {
+        String msg = """
+                {"type":"CREATE_INDEX","databaseName":"shop","collectionName":"orders","fieldNames":[]}""";
+        final var validation = RequestValidator.validate(RequestParser.parseRequest(msg));
+        assertFalse(validation.isValid());
+        assertTrue(validation.getErrorMessage().contains("fieldNames must not be empty"), validation.getErrorMessage());
+    }
+
+    @Test
+    public void test_one_invalid_field_name_refuses_the_whole_request() {
+        for (final var names : List.of("[\"a\",\"bad name\"]", "[\"a\",\"\"]", "[\"a\",\"_id\"]", "[\"a\",null]")) {
+            String msg = "{\"type\":\"CREATE_INDEX\",\"databaseName\":\"shop\",\"collectionName\":\"orders\","
+                    + "\"fieldNames\":" + names + "}";
+            assertFalse(RequestValidator.validate(RequestParser.parseRequest(msg)).isValid(), names);
+        }
+        String both = """
+                {"type":"CREATE_INDEX","databaseName":"shop","collectionName":"orders","fieldName":" ","fieldNames":["a"]}""";
+        assertFalse(RequestValidator.validate(RequestParser.parseRequest(both)).isValid());
+    }
+
+    @Test
     public void test_parse_drop_index_request() {
         String msg = """
                 {"type":"DROP_INDEX","databaseName":"db","collectionName":"coll","fieldName":"myField"}""";
@@ -289,6 +323,19 @@ public class RequestParserTest {
     @Test
     public void test_a_non_string_type_is_an_invalid_command() {
         assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest("{\"type\":5}"));
+    }
+
+    @Test
+    public void test_an_invalid_command_names_its_type_only_once_the_type_parsed() {
+        final var unparsed = assertThrows(InvalidCommandException.class,
+                () -> RequestParser.parseRequest("{\"type\":"));
+        assertNull(unparsed.getRequestType());
+        final var unknownType = assertThrows(InvalidCommandException.class,
+                () -> RequestParser.parseRequest("{\"type\":\"NOT_A_TYPE\"}"));
+        assertNull(unknownType.getRequestType());
+        final var badBody = assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(
+                "{\"type\":\"AGGREGATE\",\"databaseName\":\"d\",\"collectionName\":\"c\",\"aggregationSteps\":5}"));
+        assertEquals(OperationType.AGGREGATE, badBody.getRequestType());
     }
 
     @Test

@@ -5,7 +5,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.config.Globals;
@@ -36,7 +35,7 @@ public class SocketServer {
     public SocketServer(int port, String bindAddress, SSLServerSocketFactory sslServerSocketFactory) {
         this.port = port;
         this.bindAddress = bindAddress;
-        this.pool = Executors.newVirtualThreadPerTaskExecutor();
+        this.pool = SocketReaderThreads.newPerTaskExecutor();
         this.sslServerSocketFactory = sslServerSocketFactory;
     }
 

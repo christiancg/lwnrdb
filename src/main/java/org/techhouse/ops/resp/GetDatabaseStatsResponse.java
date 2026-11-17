@@ -1,6 +1,7 @@
 package org.techhouse.ops.resp;
 
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonSizeEstimator;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
@@ -14,5 +15,10 @@ public class GetDatabaseStatsResponse extends OperationResponse {
 
     public JsonObject getStats() {
         return stats;
+    }
+
+    @Override
+    public int estimatedJsonChars() {
+        return withPayloadChars(JsonSizeEstimator.estimate(stats));
     }
 }

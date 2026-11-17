@@ -18,8 +18,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.bckg_ops.events.EntityEvent;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
@@ -162,6 +160,21 @@ public class PageOccupancyReconcilerTest {
     }
 
     @Test
+    public void test_an_empty_page_file_with_no_row_gets_an_empty_row() throws Exception {
+        save("a");
+        final var page = new File(persistedRowsFolder().getParentFile().getParentFile().getParentFile(),
+                TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
+                        + "-1" + Globals.DB_FILE_EXTENSION);
+        Files.createFile(page.toPath());
+
+        assertTrue(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
+
+        assertEquals(0, existingRow(1).getEntryCount());
+        assertEquals(0L, existingRow(1).getPageSize());
+        assertFalse(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    @Test
     public void test_an_empty_collection_needs_nothing() throws Exception {
         assertFalse(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
     }
@@ -277,12 +290,6 @@ public class PageOccupancyReconcilerTest {
                 .findFirst().orElseThrow();
     }
 
-    private List<EntityEvent> queuedUpdates() throws Exception {
-        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
-        return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast)
-                .filter(event -> event.getType() == EventType.UPDATED).toList();
-    }
-
     @Test
     public void test_an_unindexed_record_is_adopted_and_answered_by_find_by_id() throws Exception {
         stubTheTaskManager();
@@ -310,12 +317,10 @@ public class PageOccupancyReconcilerTest {
 
         assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(ORPHAN),
                 "an index-backed read must re-derive the adopted record before the worker indexes it");
-        final var updates = queuedUpdates();
-        assertEquals(1, updates.size());
-        final var adopted = updates.getFirst().getEntity();
-        assertEquals(ORPHAN, adopted.id());
-        assertEquals(adopted.byteSize(), adopted.previousByteSize(),
-                "the reconcile already counts the record, so its event must not move the page size again");
+        final var repairs = QueuedRepairs.of(stubTaskManager);
+        assertEquals(1, repairs.size());
+        assertEquals(List.of(ORPHAN), repairs.getFirst().getIds(),
+                "the reconcile already counts the record, so only its index work is queued, never a page delta");
     }
 
     @Test
@@ -338,6 +343,6 @@ public class PageOccupancyReconcilerTest {
 
         PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
-        assertTrue(queuedUpdates().isEmpty());
+        assertTrue(QueuedRepairs.of(stubTaskManager).isEmpty());
     }
 }

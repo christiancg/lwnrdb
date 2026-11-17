@@ -1,0 +1,4 @@
+io.github.christiancg.lwnrdb.spring.boot.LwnrdbAutoConfiguration
+io.github.christiancg.lwnrdb.spring.boot.LwnrdbDataAutoConfiguration
+io.github.christiancg.lwnrdb.spring.boot.LwnrdbRepositoriesAutoConfiguration
+io.github.christiancg.lwnrdb.spring.boot.LwnrdbHealthContributorAutoConfiguration

@@ -143,4 +143,29 @@ public class CacheSkipSourceTest {
         assertEquals(ids(cache.streamCollection(TestGlobals.DB, TestGlobals.COLL).skip(5)),
                 ids(cache.streamCollectionSkipping(TestGlobals.DB, TestGlobals.COLL, 5)));
     }
+
+    @Test
+    public void pageSkipUsesPageRowCountsWithoutReadingPk() throws Exception {
+        final var whole = underReadLock(() -> ids(cache.streamCollectionSkipping(TestGlobals.DB, TestGlobals.COLL, 1)));
+        cache.userCache().evictCollectionDocuments(TestGlobals.DB, TestGlobals.COLL);
+        cache.userCache().evictPkIndex(TestGlobals.DB, TestGlobals.COLL);
+        final var userCache = cache.userCache();
+        final var fs = IocContainer.get(FileSystem.class);
+        final var spy = Mockito.spy(fs);
+        final var firstPage = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .mapToLong(AdminPageEntry::getPage).min().orElseThrow();
+        TestUtils.setPrivateField(userCache, "fs", spy);
+        TestUtils.setPrivateField(cache, "fs", spy);
+        try {
+            final var skipped = underReadLock(
+                    () -> ids(cache.streamCollectionSkipping(TestGlobals.DB, TestGlobals.COLL, DOCUMENTS / 2)));
+            assertEquals(whole.subList(DOCUMENTS / 2 - 1, whole.size()), skipped);
+        } finally {
+            TestUtils.setPrivateField(userCache, "fs", fs);
+            TestUtils.setPrivateField(cache, "fs", fs);
+        }
+        verify(spy, never()).readWholeCollectionPage(eq(TestGlobals.DB), eq(TestGlobals.COLL), eq(firstPage));
+        verify(spy, never()).readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        verify(spy, never()).pkRowsFor(eq(TestGlobals.DB), eq(TestGlobals.COLL), Mockito.anyCollection());
+    }
 }

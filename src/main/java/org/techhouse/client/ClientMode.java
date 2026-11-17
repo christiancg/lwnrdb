@@ -1,5 +1,5 @@
 package org.techhouse.client;
 
 public enum ClientMode {
-    SHELL, EXEC, DUMP, RESTORE
+    SHELL, EXEC, DUMP, RESTORE, HEALTH
 }

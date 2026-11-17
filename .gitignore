@@ -41,6 +41,12 @@ build/
 CLAUDE.md
 .claude/
 
+### Node ###
+node_modules/
+clients/typescript/dist/
+clients/typescript/coverage/
+clients/typescript/*.tgz
+
 ### Plans (local-only, not tracked) ###
 plans/
 
@@ -67,7 +73,22 @@ certs/
 ### Python ###
 .venv/
 __pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+clients/python/dist/
+clients/python/.coverage
+clients/python/coverage.xml
+
+### Client library builds ###
+.flattened-pom.xml
+.gradle/
+
+### .NET ###
+clients/dotnet/**/bin/
+clients/dotnet/**/obj/
+clients/dotnet/artifacts/
+clients/dotnet/**/TestResults/
 
 ### Runtime artifacts ###
-# Server PID file written by the CI workflow / integration scripts when launching the server.
 server.pid

@@ -8,7 +8,9 @@ import time
 import weakref
 
 import base_utils as bu
-from base_utils import Conn, check, check_code, check_status, section
+import connection_budgets
+import metrics_cases
+from base_utils import Conn, check, check_code, check_field, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("CONNLIMIT_TEST_PORT", "9444"))
@@ -16,6 +18,9 @@ AUTH_TIMEOUT_S = 1.5
 IDLE_TIMEOUT_S = 1.5
 MAX_CONNECTIONS = 6
 TRANSACTION_MAX_OPS = 20
+DELETE_MAX_MATCHES = 5
+UPDATE_MAX_MATCHES = 4
+PURGE_COLL = "purge_items"
 TRANSACTION_MAX_AGE_S = 6.0
 DB = "connlimits_db"
 COLL = "items"
@@ -27,6 +32,14 @@ OUTBOUND_CAP_BYTES = 16 * 1024 * 1024
 OVERFLOW_LOG = "exceeded clientOutboundQueueMaxBytes"
 LISTEN_RETAINED_BYTES = 2 * 1024 * 1024
 LISTEN_PAD_CHARS = 100_000
+BUDGET_COLL = "budget_items"
+BUDGET_DOCS = 60
+BUDGET_DOC_CHARS = 50_000
+BUDGET_NON_READERS = 3
+UNSENT_RESPONSE_BYTES = 10 * 1024 * 1024
+WRITE_STALL_TIMEOUT_S = 2.0
+STALL_LOG = "writing its response moved less than"
+PIPELINED_FINDS = 500
 
 bu.configure(host=HOST, port=PORT)
 
@@ -38,7 +51,8 @@ def write_config(work_dir: str):
                     authTimeoutMs=int(AUTH_TIMEOUT_S * 1000), transactionIdleTimeoutMs=int(IDLE_TIMEOUT_S * 1000),
                     maxConnections=MAX_CONNECTIONS, transactionMaxOps=TRANSACTION_MAX_OPS,
                     transactionMaxAgeMs=int(TRANSACTION_MAX_AGE_S * 1000),
-                    listenMaxRetainedBytes=f"{LISTEN_RETAINED_BYTES}")
+                    listenMaxRetainedBytes=f"{LISTEN_RETAINED_BYTES}", deleteMaxMatches=DELETE_MAX_MATCHES,
+                    updateMaxMatches=UPDATE_MAX_MATCHES)
 
 
 def raw_socket(timeout: float = 10.0) -> socket.socket:
@@ -176,7 +190,8 @@ def test_a_flat_array_over_the_token_budget_is_refused_and_the_connection_surviv
     with Conn.authenticated() as conn:
         refused = conn.send_raw(line)
         check("A 100 000-byte flat array -> The command is not valid",
-              refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid",
+              refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid"
+              and refused.get("errorCode") == "400-43" and "type" in refused and refused["type"] is None,
               f"got={str(refused)[:200]}")
         check_status("The next LIST_DATABASES on the same connection", conn.send({"type": "LIST_DATABASES"}), "OK")
 
@@ -361,6 +376,20 @@ def test_close_connection_is_always_accepted_after_a_reap():
         holder.close()
 
 
+def test_server_info_after_a_reap_leaves_the_notice_for_the_next_request():
+    section("SERVER_INFO after a reap is answered and the next request still gets 409-16")
+    holder = open_transaction_with_one_write("info-1")
+    try:
+        time.sleep(IDLE_TIMEOUT_S + 1)
+        info = holder.send({"type": "SERVER_INFO"})
+        check_status("SERVER_INFO is answered, not 409-16", info, "OK")
+        check("It reports READY", info.get("server", {}).get("state") == "READY", f"got={info}")
+        check_code("The next SAVE -> 409-16", holder.send(save("lost-info")), "ERROR", "409-16")
+        check_status("It was not written as a standalone save", holder.send(find("lost-info")), "NOT_FOUND")
+    finally:
+        holder.close()
+
+
 def test_a_transaction_past_its_operation_limit_is_refused():
     section("A transaction refuses the write that would take it past transactionMaxOps")
     with Conn.authenticated() as holder:
@@ -373,6 +402,58 @@ def test_a_transaction_past_its_operation_limit_is_refused():
         check_status("The transaction still commits what fitted", holder.send({"type": "COMMIT_TRANSACTION"}), "OK")
         check_status("A fitted document is durable", holder.send(find("many-0")), "OK")
         check_status("The refused one was never written", holder.send(find("many-overflow")), "NOT_FOUND")
+
+
+def test_an_update_condition_past_update_max_matches_is_refused_whole():
+    section("A SAVE condition matching more than updateMaxMatches writes nothing")
+    with Conn.authenticated() as conn:
+        coll = "bump_items"
+        check_status("CREATE_COLLECTION for the bump cases",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+        objects = [{"_id": f"bump-{i}", "kind": "old" if i <= UPDATE_MAX_MATCHES else "new"}
+                   for i in range(UPDATE_MAX_MATCHES + 3)]
+        check_status("BULK_SAVE five old and two new documents",
+                     conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                                "objects": objects}), "OK")
+        old = {"fieldOperatorType": "EQUALS", "field": "kind", "value": "old"}
+        check_code(f"A condition matching {UPDATE_MAX_MATCHES + 1} documents -> 400-45",
+                   conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "condition": old,
+                              "object": {"bumped": True}}), "ERROR", "400-45")
+        bumped = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "aggregationSteps": [
+            {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "bumped", "value": True}}]})
+        check_code("No document carries the patch after the refusal", bumped, "NOT_FOUND", "404-3")
+        check_status("Retiring one old document by id",
+                     conn.send({"type": "DELETE", "databaseName": DB, "collectionName": coll, "_id": "bump-0"}),
+                     "OK")
+        reply = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "condition": old,
+                           "object": {"bumped": True}})
+        check_field(f"A condition matching exactly {UPDATE_MAX_MATCHES} documents updates them all", reply,
+                    "updatedCount", UPDATE_MAX_MATCHES)
+
+
+def test_a_delete_condition_past_delete_max_matches_is_refused_whole():
+    section("A DELETE condition matching more than deleteMaxMatches deletes nothing")
+    with Conn.authenticated() as conn:
+        check_status("CREATE_COLLECTION for the purge cases",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": PURGE_COLL}), "OK")
+        objects = [{"_id": f"purge-{i}", "kind": "stale" if i <= DELETE_MAX_MATCHES else "fresh"}
+                   for i in range(DELETE_MAX_MATCHES + 3)]
+        check_status("BULK_SAVE six stale and two fresh documents",
+                     conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": PURGE_COLL,
+                                "objects": objects}), "OK")
+        stale = {"fieldOperatorType": "EQUALS", "field": "kind", "value": "stale"}
+        check_code(f"A condition matching {DELETE_MAX_MATCHES + 1} documents -> 400-44",
+                   conn.send({"type": "DELETE", "databaseName": DB, "collectionName": PURGE_COLL,
+                              "condition": stale}), "ERROR", "400-44")
+        remaining = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": PURGE_COLL,
+                               "aggregationSteps": [{"type": "COUNT"}]})
+        check_field("Every document survives the refusal", remaining, "results.0.count", DELETE_MAX_MATCHES + 3)
+        check_status("Deleting one stale document by id fits",
+                     conn.send({"type": "DELETE", "databaseName": DB, "collectionName": PURGE_COLL,
+                                "_id": "purge-0"}), "OK")
+        reply = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": PURGE_COLL, "condition": stale})
+        check_field(f"A condition matching exactly {DELETE_MAX_MATCHES} documents deletes them all", reply,
+                    "deletedCount", DELETE_MAX_MATCHES)
 
 
 def test_a_busy_transaction_is_still_reaped_at_its_maximum_age():
@@ -480,6 +561,99 @@ def test_an_unauthenticated_request_is_answered_401_1_without_validation():
               f"got={frame}")
 
 
+def write_budget_config(work_dir: str):
+    bu.write_config(work_dir, PORT, maxRequestSize="128Kb", maxEntrySize="64Kb",
+                    maxUnsentResponseBytes=f"{UNSENT_RESPONSE_BYTES}",
+                    clientWriteStallTimeoutMs=int(WRITE_STALL_TIMEOUT_S * 1000),
+                    transactionTotalMaxBytes=connection_budgets.TRANSACTION_POOL)
+
+
+def budget_aggregate() -> dict:
+    return {"type": "AGGREGATE", "databaseName": DB, "collectionName": BUDGET_COLL, "aggregationSteps": []}
+
+
+def setup_budget_collection():
+    with Conn.authenticated() as admin:
+        check_status("CREATE_DATABASE for the budget phase",
+                     admin.send({"type": "CREATE_DATABASE", "databaseName": DB}), "OK")
+        check_status("CREATE_COLLECTION for the budget phase",
+                     admin.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": BUDGET_COLL}),
+                     "OK")
+        saved = [admin.send({"type": "SAVE", "databaseName": DB, "collectionName": BUDGET_COLL,
+                             "object": {"_id": f"large-{i}", "blob": chr(ord("a") + i % 26) * BUDGET_DOC_CHARS}})
+                 for i in range(BUDGET_DOCS)]
+        check("Every large document is saved", all(r.get("status") == "OK" for r in saved), f"first={saved[0]}")
+        small = [admin.send({"type": "SAVE", "databaseName": DB, "collectionName": BUDGET_COLL,
+                             "object": {"_id": f"small-{i}", "n": i}}) for i in range(10)]
+        check("Every small document is saved", all(r.get("status") == "OK" for r in small), f"first={small[0]}")
+
+
+def test_unread_large_reads_exhaust_the_response_budget(log_path: str):
+    section("Unread responses past maxUnsentResponseBytes refuse a large read with 503-17, never a write")
+    stalls_before = bu.read_log(log_path).count(STALL_LOG)
+    reader = Conn.authenticated()
+    non_readers = [bu.non_reading_conn() for _ in range(BUDGET_NON_READERS)]
+    try:
+        for conn in non_readers:
+            bu.send_without_reading(conn, budget_aggregate())
+        time.sleep(0.5)
+        refused = reader.send(budget_aggregate())
+        check_code(f"A fourth ~3 MB AGGREGATE behind {BUDGET_NON_READERS} unread ones", refused, "ERROR", "503-17")
+        check("The refusal names the read it refused", refused.get("type") == "AGGREGATE", f"got={refused}")
+        check_status("A small FIND_BY_ID is still answered",
+                     reader.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": BUDGET_COLL,
+                                  "_id": "small-1"}), "OK")
+        check_status("A write is still answered",
+                     reader.send({"type": "SAVE", "databaseName": DB, "collectionName": BUDGET_COLL,
+                                  "object": {"_id": "small-written", "n": 1}}), "OK")
+        check("The server gives up on every non-reader once its write stalls past clientWriteStallTimeoutMs",
+              bu.wait_until(lambda: bu.read_log(log_path).count(STALL_LOG) - stalls_before >= BUDGET_NON_READERS,
+                            WRITE_STALL_TIMEOUT_S + 15),
+              f"stall lines={bu.read_log(log_path).count(STALL_LOG) - stalls_before}")
+        closed = [bu.read_until_closed(conn, timeout=15) for conn in non_readers]
+        check("Each non-reader then finds its connection closed", all(closed), f"closed={closed}")
+        answered = reader.send(budget_aggregate())
+        check_status("Once they are gone the same AGGREGATE is answered", answered, "OK")
+        check("It carries every document", len(answered.get("results") or []) == BUDGET_DOCS + 11,
+              f"results={len(answered.get('results') or [])}")
+    finally:
+        for conn in non_readers:
+            conn.close()
+        reader.close()
+
+
+def test_pipelined_small_requests_answer_in_order():
+    section("Pipelined small requests are answered in order")
+    with Conn.authenticated() as conn:
+        lines = [json.dumps({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": BUDGET_COLL,
+                             "_id": f"small-{i % 10}"}) for i in range(PIPELINED_FINDS)]
+        conn.s.sendall(("\n".join(lines) + "\n").encode())
+        answers = [conn._read_response() for _ in range(PIPELINED_FINDS)]
+        in_order = sum(1 for i, answer in enumerate(answers)
+                       if (answer.get("object") or {}).get("_id") == f"small-{i % 10}")
+        check(f"All {PIPELINED_FINDS} answers arrive, each matching its request", in_order == PIPELINED_FINDS,
+              f"in order={in_order}")
+
+
+def run_budget_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-connlimits-budget-")
+    log_path = os.path.join(work_dir, "server.log")
+    write_budget_config(work_dir)
+    print(f"  Budget phase working dir: {work_dir}")
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path, port=PORT)
+        setup_budget_collection()
+        test_unread_large_reads_exhaust_the_response_budget(log_path)
+        test_pipelined_small_requests_answer_in_order()
+        connection_budgets.test_a_drip_reader_is_closed_and_frees_the_response_budget(
+            log_path, budget_aggregate(), WRITE_STALL_TIMEOUT_S, STALL_LOG)
+        connection_budgets.test_buffered_transactions_share_one_budget(DB, BUDGET_COLL)
+    finally:
+        bu.stop_server(proc, port=PORT, wait_for_port=True)
+    return log_path
+
+
 def test_max_connections_admits_exactly_the_limit_under_concurrency():
     section("maxConnections admits exactly the limit under a concurrent burst")
     time.sleep(0.5)
@@ -542,7 +716,10 @@ def main():
         test_a_busy_transaction_is_not_reaped()
         test_a_dribbling_transaction_holder_is_reaped()
         test_close_connection_is_always_accepted_after_a_reap()
+        test_server_info_after_a_reap_leaves_the_notice_for_the_next_request()
         test_a_transaction_past_its_operation_limit_is_refused()
+        test_a_delete_condition_past_delete_max_matches_is_refused_whole()
+        test_an_update_condition_past_update_max_matches_is_refused_whole()
         test_a_busy_transaction_is_still_reaped_at_its_maximum_age()
         test_unparseable_lines_before_authentication_close_the_connection()
         test_an_unauthenticated_request_is_answered_401_1_without_validation()
@@ -550,9 +727,13 @@ def main():
         test_an_idle_transaction_is_reaped_while_its_client_is_not_reading()
         test_outbound_cap_counts_utf8_bytes(log_path)
         test_max_connections_admits_exactly_the_limit_under_concurrency()
+        metrics_cases.test_the_endpoint_is_off_by_default()
     finally:
-        bu.stop_server(proc, port=PORT, wait_for_port=False)
-    bu.summary(on_failure=lambda: bu.dump_log(log_path))
+        bu.stop_server(proc, port=PORT, wait_for_port=True)
+    budget_log_path = run_budget_phase()
+    metrics_log_path = metrics_cases.run_all(bu.write_config, PORT)
+    bu.summary(on_failure=lambda: (bu.dump_log(log_path), bu.dump_log(budget_log_path),
+                                   bu.dump_log(metrics_log_path)))
 
 
 if __name__ == "__main__":

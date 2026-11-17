@@ -2,6 +2,7 @@ package org.techhouse.ops.resp;
 
 import java.util.List;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonSizeEstimator;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
@@ -15,5 +16,10 @@ public class ListTriggerRunsResponse extends OperationResponse {
 
     public List<JsonObject> getRuns() {
         return runs;
+    }
+
+    @Override
+    public int estimatedJsonChars() {
+        return withPayloadChars(JsonSizeEstimator.estimate(runs));
     }
 }

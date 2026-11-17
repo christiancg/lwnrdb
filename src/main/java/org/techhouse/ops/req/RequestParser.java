@@ -48,6 +48,8 @@ public final class RequestParser {
 
     private static final EJson eJson = IocContainer.get(EJson.class);
     private static final Set<String> AGGREGATION_STEPS_KEY = Set.of("aggregationSteps");
+    private static final String CONDITION_FIELD = "condition";
+    private static final Set<String> CONDITION_KEY = Set.of(CONDITION_FIELD);
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         return parseRequest(message, Integer.MAX_VALUE);
@@ -65,21 +67,17 @@ public final class RequestParser {
     }
 
     private static OperationRequest parseRoot(final Supplier<JsonObject> rootParser) throws InvalidCommandException {
+        OperationType parsedType = null;
         try {
             final var root = rootParser.get();
             final var type = OperationType.valueOf(root.get("type").asJsonString().getValue());
+            parsedType = type;
             return switch (type) {
                 case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);
-                case SAVE -> {
-                    final var parsed = eJson.fromJson(root, SaveRequest.class);
-                    if (parsed.getObject().get(Globals.PK_FIELD) instanceof JsonString objectId) {
-                        parsed.set_id(objectId.getValue());
-                    }
-                    yield parsed;
-                }
+                case SAVE -> parseSaveRequest(root);
                 case FIND_BY_ID -> eJson.fromJson(root, FindByIdRequest.class);
                 case AGGREGATE -> parseAggregationRequest(root);
-                case DELETE -> eJson.fromJson(root, DeleteRequest.class);
+                case DELETE -> parseDeleteRequest(root);
                 case CREATE_DATABASE -> eJson.fromJson(root, CreateDatabaseRequest.class);
                 case DROP_DATABASE -> eJson.fromJson(root, DropDatabaseRequest.class);
                 case LIST_DATABASES -> eJson.fromJson(root, ListDatabasesRequest.class);
@@ -93,6 +91,7 @@ public final class RequestParser {
                 case DELETE_SCHEMA -> eJson.fromJson(root, DeleteSchemaRequest.class);
                 case GET_SCHEMA -> eJson.fromJson(root, GetSchemaRequest.class);
                 case CLOSE_CONNECTION -> eJson.fromJson(root, CloseConnectionRequest.class);
+                case SERVER_INFO -> eJson.fromJson(root, ServerInfoRequest.class);
                 case AUTHENTICATE -> eJson.fromJson(root, AuthenticateRequest.class);
                 case CREATE_USER -> eJson.fromJson(root, CreateUserRequest.class);
                 case DELETE_USER -> eJson.fromJson(root, DeleteUserRequest.class);
@@ -112,6 +111,9 @@ public final class RequestParser {
                 case CANCEL_SCRIPT -> eJson.fromJson(root, CancelScriptRequest.class);
                 case LIST_TRIGGER_RUNS -> eJson.fromJson(root, ListTriggerRunsRequest.class);
                 case RESOLVE_TRIGGER_RUN -> eJson.fromJson(root, ResolveTriggerRunRequest.class);
+                case START_SNAPSHOT -> eJson.fromJson(root, StartSnapshotRequest.class);
+                case READ_SNAPSHOT -> eJson.fromJson(root, ReadSnapshotRequest.class);
+                case RELEASE_SNAPSHOT -> eJson.fromJson(root, ReleaseSnapshotRequest.class);
                 case RUN_SCRIPT -> eJson.fromJson(root, RunScriptRequest.class);
                 case SAVE_PROCEDURE -> eJson.fromJson(root, SaveProcedureRequest.class);
                 case DELETE_PROCEDURE -> eJson.fromJson(root, DeleteProcedureRequest.class);
@@ -129,7 +131,7 @@ public final class RequestParser {
                 case RELEASE_FAULT -> eJson.fromJson(root, ReleaseFaultRequest.class);
             };
         } catch (Exception e) {
-            throw new InvalidCommandException(e);
+            throw new InvalidCommandException(parsedType, e);
         }
     }
 
@@ -137,6 +139,27 @@ public final class RequestParser {
         final var aggRequest = eJson.fromJson(parsed, AggregateRequest.class, AGGREGATION_STEPS_KEY);
         aggRequest.setAggregationSteps(parseAggregationSteps(parsed.get("aggregationSteps").asJsonArray()));
         return aggRequest;
+    }
+
+    private static OperationRequest parseSaveRequest(final JsonObject parsed) {
+        final var saveRequest = eJson.fromJson(parsed, SaveRequest.class, CONDITION_KEY);
+        if (saveRequest.getObject().get(Globals.PK_FIELD) instanceof JsonString objectId) {
+            saveRequest.set_id(objectId.getValue());
+        }
+        final var condition = parsed.get(CONDITION_FIELD);
+        if (condition != null && !condition.isJsonNull()) {
+            saveRequest.setCondition(recursiveParse(condition.asJsonObject()));
+        }
+        return saveRequest;
+    }
+
+    private static OperationRequest parseDeleteRequest(final JsonObject parsed) {
+        final var deleteRequest = eJson.fromJson(parsed, DeleteRequest.class, CONDITION_KEY);
+        final var condition = parsed.get(CONDITION_FIELD);
+        if (condition != null && !condition.isJsonNull()) {
+            deleteRequest.setCondition(recursiveParse(condition.asJsonObject()));
+        }
+        return deleteRequest;
     }
 
     private static OperationRequest parseListenRequest(final JsonObject parsed) {

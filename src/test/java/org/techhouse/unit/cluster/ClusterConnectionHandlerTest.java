@@ -130,6 +130,28 @@ public class ClusterConnectionHandlerTest extends ClusterConnectionHandlerTestBa
         }
     }
 
+    @Test
+    public void aMalformedFrameIsSkippedAndTheNextOneIsAnswered() throws Exception {
+        try (var raw = new Socket("127.0.0.1", cluster.serverPort())) {
+            raw.setSoTimeout((int) ACK_TIMEOUT_MS);
+            final var out = new BufferedWriter(new OutputStreamWriter(raw.getOutputStream(), StandardCharsets.UTF_8));
+            final var in = new BufferedReader(new InputStreamReader(raw.getInputStream(), StandardCharsets.UTF_8));
+            out.write(eJson.toJson(envelope(ClusterMessageType.HELLO)));
+            out.newLine();
+            out.write("{\"type\":\"GOSSIP\",\"secret\":");
+            out.newLine();
+            out.write("{}");
+            out.newLine();
+            out.write(eJson.toJson(envelope(ClusterMessageType.GOSSIP)));
+            out.newLine();
+            out.flush();
+
+            final var answer = eJson.fromJson(in.readLine(), ClusterMessage.class);
+
+            assertEquals(ClusterMessageType.GOSSIP_ACK, answer.getType());
+        }
+    }
+
     // Only gossip left the serial path: a peer's writes must still apply in the order it sent them.
     @Test
     public void test_requests_other_than_gossip_are_still_answered_in_order() throws Exception {

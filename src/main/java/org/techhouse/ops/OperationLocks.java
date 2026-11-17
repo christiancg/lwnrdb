@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -83,34 +84,50 @@ public final class OperationLocks {
 
     public static OperationResponse withReadLocks(boolean dirtyRead, List<String> collectionIds, OperationType type,
             ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
-        return withAcquiredReadLocks(timeout -> locks.acquireReadLocks(dirtyRead, collectionIds, timeout), type,
-                errorCode, bounded, attempt);
+        return withAcquiredReadLocks(timeout -> locks.acquireReadLocks(dirtyRead, collectionIds, timeout),
+                locks::releaseReadLocks, type, errorCode, bounded, collectionIds, attempt);
     }
 
     public static OperationResponse withPointReadLock(boolean dirtyRead, String collectionId, OperationType type,
             ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
-        return withAcquiredReadLocks(timeout -> locks.acquirePointReadLock(dirtyRead, collectionId, timeout), type,
-                errorCode, bounded, attempt);
+        return withAcquiredReadLocks(timeout -> locks.acquirePointReadLock(dirtyRead, collectionId, timeout),
+                locks::releasePointReadLocks, type, errorCode, bounded, List.of(collectionId), attempt);
+    }
+
+    public static boolean waitsBounded(boolean bounded, List<String> collectionIds) {
+        return bounded || locks.fences(collectionIds);
+    }
+
+    public static ErrorCode readRefusalOf(boolean bounded, List<String> collectionIds) {
+        if (locks.deferredWritesPending(collectionIds)) {
+            return ErrorCode.WRITES_NOT_APPLIED;
+        }
+        if (!bounded && locks.fences(collectionIds)) {
+            return ErrorCode.COLLECTION_FENCED;
+        }
+        return ErrorCode.TRANSACTION_LOCK_TIMEOUT;
     }
 
     private interface ReadLockAcquisition {
         List<String> acquire(long timeoutMillis) throws InterruptedException;
     }
 
-    private static OperationResponse withAcquiredReadLocks(ReadLockAcquisition acquisition, OperationType type,
-            ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
+    private static OperationResponse withAcquiredReadLocks(ReadLockAcquisition acquisition,
+            Consumer<List<String>> release, OperationType type, ErrorCode errorCode, boolean bounded,
+            List<String> collectionIds, OperationResponse.Attempt attempt) {
         final var readLocks = new ArrayList<String>();
         try {
             return OperationResponse.respondOrError(type, errorCode, () -> {
-                final var acquired = acquisition.acquire(bounded ? configuration.getTransactionLockTimeoutMs() : 0L);
+                final var acquired = acquisition.acquire(
+                        waitsBounded(bounded, collectionIds) ? configuration.getTransactionLockTimeoutMs() : 0L);
                 if (acquired == null) {
-                    return new OperationResponse(type, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+                    return new OperationResponse(type, readRefusalOf(bounded, collectionIds));
                 }
                 readLocks.addAll(acquired);
                 return attempt.run();
             });
         } finally {
-            locks.releaseReadLocks(readLocks);
+            release.accept(readLocks);
         }
     }
 }

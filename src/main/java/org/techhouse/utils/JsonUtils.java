@@ -27,6 +27,13 @@ import org.techhouse.ejson.internal.JsonStrings;
 public final class JsonUtils {
     private static final double MAX_EXACT_LONG = 9007199254740992d;
     private static final int MAX_RECURSIVE_NESTING_LIMIT = 1024;
+    public static final int HASH_KEY_BYTES = 16;
+    private static final int HASH_KEY_DIGIT_BITS = 5;
+    private static final int HASH_KEY_DIGIT_MASK = (1 << HASH_KEY_DIGIT_BITS) - 1;
+    private static final int BYTE_MASK = 0xFF;
+    public static final int HASH_KEY_LENGTH = (HASH_KEY_BYTES * Byte.SIZE + HASH_KEY_DIGIT_BITS - 1)
+            / HASH_KEY_DIGIT_BITS;
+    private static final char[] HASH_KEY_DIGITS = "0123456789abcdefghijklmnopqrstuv".toCharArray();
 
     private JsonUtils() {
     }
@@ -202,11 +209,29 @@ public final class JsonUtils {
     public static String hashElement(JsonBaseElement element) {
         try {
             final var digest = MessageDigest.getInstance("SHA-256");
-            final var bytes = digest.digest(canonicalize(element).getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(bytes);
+            return hashKeyOf(digest.digest(canonicalize(element).getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }
+    }
+
+    public static String hashKeyOf(byte[] digest) {
+        final var key = new char[HASH_KEY_LENGTH];
+        var buffer = 0;
+        var bits = 0;
+        var at = 0;
+        for (var i = 0; i < HASH_KEY_BYTES; i++) {
+            buffer = buffer << Byte.SIZE | digest[i] & BYTE_MASK;
+            bits += Byte.SIZE;
+            while (bits >= HASH_KEY_DIGIT_BITS) {
+                bits -= HASH_KEY_DIGIT_BITS;
+                key[at++] = HASH_KEY_DIGITS[buffer >>> bits & HASH_KEY_DIGIT_MASK];
+            }
+        }
+        if (bits > 0) {
+            key[at] = HASH_KEY_DIGITS[buffer << HASH_KEY_DIGIT_BITS - bits & HASH_KEY_DIGIT_MASK];
+        }
+        return new String(key);
     }
 
     public static String sha256(String value) {
@@ -234,74 +259,25 @@ public final class JsonUtils {
         if (path.indexOf('.') < 0) {
             return obj.get(path);
         }
-        final var segments = pathSegments(path);
-        if (segments.isEmpty()) {
-            return JsonNull.INSTANCE;
-        }
-        JsonBaseElement current = obj;
-        for (final var segment : segments) {
-            if (!current.isJsonObject()) {
-                return null;
-            }
-            current = current.asJsonObject().get(segment);
-            if (current == null) {
-                return null;
-            }
-        }
-        return current;
+        return FieldPath.of(path).resolve(obj);
     }
 
     public static void setPath(JsonObject obj, String path, JsonBaseElement value) {
-        final var segments = pathSegments(path);
-        if (segments.isEmpty()) {
-            return;
-        }
-        var parent = obj;
-        for (final var segment : segments.subList(0, segments.size() - 1)) {
-            final var child = parent.get(segment);
-            if (child != null && child.isJsonObject()) {
-                parent = child.asJsonObject();
-            } else {
-                final var created = new JsonObject();
-                parent.add(segment, created);
-                parent = created;
-            }
-        }
-        parent.add(segments.getLast(), value);
+        FieldPath.of(path).set(obj, value);
     }
 
     public static void removePath(JsonObject obj, String path) {
-        final var segments = pathSegments(path);
-        if (segments.isEmpty()) {
-            return;
-        }
-        var parent = obj;
-        for (final var segment : segments.subList(0, segments.size() - 1)) {
-            final var child = parent.get(segment);
-            if (child == null || !child.isJsonObject()) {
-                return;
-            }
-            parent = child.asJsonObject();
-        }
-        parent.remove(segments.getLast());
+        FieldPath.of(path).remove(obj);
     }
 
     public static WriteTree writeTreeOf(Collection<String> paths) {
         final var segmented = new ArrayList<List<String>>(paths.size());
         for (final var path : paths) {
             if (path != null) {
-                segmented.add(pathSegments(path));
+                segmented.add(FieldPath.of(path).segments());
             }
         }
         return WriteTree.of(segmented);
-    }
-
-    private static List<String> pathSegments(String path) {
-        if (path.indexOf('.') < 0) {
-            return List.of(path);
-        }
-        final var stripped = stripTrailingDots(path);
-        return stripped.isEmpty() ? List.of() : List.of(stripped.split("\\.", -1));
     }
 
     public static boolean hasInPath(JsonObject obj, String path) {

@@ -43,6 +43,12 @@ public class FaultInjector {
         }
     }
 
+    public void at(FaultPoint point, String dbName, String collName) {
+        if (enabled) {
+            at(point, dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName);
+        }
+    }
+
     public boolean dropsAt(FaultPoint point, String subject) {
         if (!enabled) {
             return false;
@@ -53,6 +59,18 @@ public class FaultInjector {
         }
         perform(fired);
         return fired.action == FaultAction.DROP;
+    }
+
+    public boolean failsAt(FaultPoint point, String subject) {
+        if (!enabled) {
+            return false;
+        }
+        final var fired = fire(point, subject);
+        if (fired == null) {
+            return false;
+        }
+        perform(fired);
+        return fired.action == FaultAction.FAIL;
     }
 
     public void arm(FaultPoint point, FaultAction action, String match) {

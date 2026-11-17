@@ -195,4 +195,18 @@ public class AdminRecordMergeTest extends AdminRecordTestBase {
             assertTrue(Thread.interrupted());
         }
     }
+
+    @Test
+    public void aTombstoneAppliedInABatchOutranksALowerLiveRecordLaterInIt() {
+        final var key = AdminRecordKey.collection(TestGlobals.DB, "late");
+        final var older = clock.next();
+        final var newer = clock.next();
+
+        final var result = AdminRecordMerge
+                .apply(List.of(tombstone(key, newer), collection(TestGlobals.DB, "late", older)), true);
+
+        assertTrue(result.complete());
+        assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, "late"),
+                "the batch's own tombstone keeps the older live record out");
+    }
 }

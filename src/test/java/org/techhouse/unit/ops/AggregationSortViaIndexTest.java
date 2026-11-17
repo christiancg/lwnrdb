@@ -3,6 +3,7 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
@@ -14,6 +15,7 @@ import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -27,6 +29,7 @@ import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.JsonUtils;
 
 public class AggregationSortViaIndexTest {
     private static final String FIELD = "score";
@@ -413,5 +416,54 @@ public class AggregationSortViaIndexTest {
         request.setAggregationSteps(List.of(new SortAggregationStep(FIELD, true)));
         return AggregationOperationHelper.processAggregation(request).stream()
                 .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue()).toList();
+    }
+
+    @Test
+    public void sortLimitWalksWithoutCopying() throws Exception {
+        for (var i = 0; i < 3000; i++) {
+            final var obj = new JsonObject();
+            obj.add(Globals.PK_FIELD, new JsonString(String.format("w%04d", i)));
+            obj.addProperty("rank", (i * 7919) % 3000);
+            switch (i % 3) {
+                case 0 -> obj.addProperty(FIELD, (i * 37) % 1000);
+                case 1 -> obj.addProperty(FIELD, (i % 2 == 0 ? "Word" : "word") + (i * 7) % 500);
+                default -> obj.addProperty(FIELD, i % 5 == 0);
+            }
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
+                    DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj));
+        }
+        enableIndex();
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "rank");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(FIELD, "rank"));
+        for (final var ascending : List.of(true, false)) {
+            final var compares = new long[1];
+            final Comparator<FieldIndexEntry<?>> order = (a, b) -> {
+                compares[0]++;
+                final var left = IndexHelper.indexValueToElement(a.getValue());
+                final var right = IndexHelper.indexValueToElement(b.getValue());
+                return ascending
+                        ? JsonUtils.compareSortKeysAscending(left, right)
+                        : JsonUtils.compareSortKeysDescending(left, right);
+            };
+            for (final var limit : List.of(1L, 7L, 40L, 2500L, Long.MAX_VALUE)) {
+                final var everything = new ArrayList<FieldIndexEntry<?>>();
+                for (final var type : List.of(Number.class, String.class, Boolean.class)) {
+                    everything.addAll(
+                            cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, FIELD, type));
+                }
+                everything.sort(order);
+                final var expected = IndexHelper.idsInOrder(everything, order, limit);
+                compares[0] = 0;
+                final var walked = IndexHelper.getSortedIdsForField(TestGlobals.DB, TestGlobals.COLL, FIELD, order,
+                        limit, ReadObserver.NONE);
+                assertEquals(expected, walked, "ascending " + ascending + " limit " + limit);
+            }
+            compares[0] = 0;
+            final var ranked = IndexHelper.getSortedIdsForField(TestGlobals.DB, TestGlobals.COLL, "rank", order, 7,
+                    ReadObserver.NONE);
+            assertEquals(7, ranked.size());
+            assertTrue(compares[0] < 64, "a top-7 over 3000 numbers walks the sorted list, it never sorts a copy: "
+                    + compares[0] + " compares");
+        }
     }
 }

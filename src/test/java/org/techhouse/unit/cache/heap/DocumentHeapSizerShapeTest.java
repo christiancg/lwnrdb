@@ -14,6 +14,7 @@ import org.techhouse.ejson.elements.JsonString;
 public class DocumentHeapSizerShapeTest {
     private static final HeapLayout LAYOUT = new HeapLayout(8, 12, 4);
     private static final int WIDE = 20;
+    private static final long COMPACT_STRING_ELEMENT_BYTES = 16;
 
     private static String[] keys(int count) {
         final var keys = new String[count];
@@ -45,6 +46,11 @@ public class DocumentHeapSizerShapeTest {
             total += LAYOUT.stringSize(key);
         }
         return total;
+    }
+
+    @Test
+    public void test_a_string_element_keeps_its_sixteen_bytes_under_compact_headers() {
+        assertEquals(COMPACT_STRING_ELEMENT_BYTES, LAYOUT.shallowSize(JsonString.class));
     }
 
     @Test

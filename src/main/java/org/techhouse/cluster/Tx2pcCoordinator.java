@@ -10,6 +10,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.ex.LoggedWriteNotAppliedException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
@@ -67,6 +68,13 @@ public class Tx2pcCoordinator {
         if (local) {
             final var localResult = TwoPhaseParticipant.commitPrepared(clientId,
                     List.of(Tx2pcLog.coordinatorMarker(dtxId, sessionId, participants)));
+            if (!Tx2pcLog.isCommitted(dtxId)
+                    && ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(localResult.getErrorCode())) {
+                logger.error("The 2PC commit decision for " + dtxId + " may have been logged although it is not"
+                        + " recorded yet; answering indeterminate and leaving the slices to recovery: "
+                        + localResult.getMessage());
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_INDETERMINATE);
+            }
             if (!Tx2pcLog.isCommitted(dtxId)) {
                 logger.error("Failed to record the 2PC commit decision for " + dtxId + " with the coordinator's own"
                         + " slice: " + localResult.getMessage());
@@ -77,8 +85,11 @@ public class Tx2pcCoordinator {
                 logger.error("The coordinator's own slice of " + dtxId
                         + " failed to apply; keeping the commit marker for recovery to re-drive");
             }
-        } else if (!recordedDecision(dtxId, sessionId, participants)) {
-            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+        } else {
+            final var notRecorded = recordDecision(dtxId, sessionId, participants);
+            if (notRecorded != null) {
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, notRecorded);
+            }
         }
         final var allAcked = sendToAll(remotes, ClusterMessageType.COMMIT_TX, sessionId, dtxId,
                 ClusterMessageType.COMMIT_TX_ACK, null);
@@ -94,14 +105,20 @@ public class Tx2pcCoordinator {
                 : new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_INDETERMINATE);
     }
 
-    private boolean recordedDecision(String dtxId, String sessionId, List<String> participants) {
+    private ErrorCode recordDecision(String dtxId, String sessionId, List<String> participants) {
         try {
             Tx2pcLog.recordCoordinatorCommit(dtxId, sessionId, participants);
-            return true;
+            return null;
         } catch (Exception e) {
             logger.error("Failed to record the 2PC commit decision for " + dtxId, e);
-            return false;
+            return unlessLogged(e);
         }
+    }
+
+    private static ErrorCode unlessLogged(Exception failure) {
+        return LoggedWriteNotAppliedException.isCauseOf(failure)
+                ? ErrorCode.TRANSACTION_INDETERMINATE
+                : ErrorCode.ERROR_TRANSACTION;
     }
 
     public OperationResponse forceResolve(String dtxId, boolean commit) {
@@ -119,7 +136,7 @@ public class Tx2pcCoordinator {
             }, budget);
         } catch (Exception e) {
             logger.error("Failed to force-resolve transaction " + dtxId, e);
-            return new OperationResponse(OperationType.RESOLVE_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+            return new OperationResponse(OperationType.RESOLVE_TRANSACTION, unlessLogged(e));
         }
         final var type = commit ? ClusterMessageType.COMMIT_TX : ClusterMessageType.ABORT_TX;
         final var ack = commit ? ClusterMessageType.COMMIT_TX_ACK : ClusterMessageType.ABORT_TX_ACK;

@@ -1,0 +1,15 @@
+{
+  "area": "users",
+  "cases": [
+    {"name":"users.authenticate","request":{"type":"AUTHENTICATE","username":"alice","password":"Secret-1234"}},
+    {"name":"users.create","request":{"type":"CREATE_USER","username":"bob","password":"Secret-1234","admin":false,"globalPermissions":["CREATE_DATABASE"],"databasePermissions":{"shop":"READ_WRITE"},"collectionPermissions":{"shop|orders":"READ"},"scriptPermissions":{"shop":"MANAGE"}}},
+    {"name":"users.create_minimal","request":{"type":"CREATE_USER","username":"bob","password":"Secret-1234"}},
+    {"name":"users.delete","request":{"type":"DELETE_USER","username":"bob"}},
+    {"name":"users.change_permissions","request":{"type":"CHANGE_PERMISSIONS","username":"bob","admin":false,"globalPermissions":[],"databasePermissions":{"shop":"READ"},"collectionPermissions":{},"scriptPermissions":{"shop":"RUN"}}},
+    {"name":"users.set_password_own","request":{"type":"SET_PASSWORD","username":"alice","currentPassword":"Secret-1234","newPassword":"Secret-5678"}},
+    {"name":"users.set_password_admin","request":{"type":"SET_PASSWORD","username":"bob","newPassword":"Secret-5678"}},
+    {"name":"users.list","request":{"type":"LIST_USERS"}},
+    {"name":"users.list_filtered","request":{"type":"LIST_USERS","aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"admin","value":true}}]}},
+    {"name":"users.set_database_owners","request":{"type":"SET_DATABASE_OWNERS","databaseName":"shop","owners":["alice","bob"]}}
+  ]
+}

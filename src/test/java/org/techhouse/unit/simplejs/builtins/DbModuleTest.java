@@ -87,6 +87,37 @@ public class DbModuleTest {
     }
 
     @Test
+    public void test_update_where_returns_the_count() {
+        final var fake = new FakeDatabaseAccess();
+        fake.nextUpdatedCount = 4L;
+        final var db = DbModule.create(fake, null, null, null);
+        final var condition = new JsObject();
+        condition.set("fieldOperatorType", new JsString("EQUALS"));
+        condition.set("field", new JsString("status"));
+        condition.set("value", new JsString("pending"));
+        final var patch = new JsObject();
+        patch.set("status", new JsString("expired"));
+        patch.set("by", new JsString("sweeper"));
+        final var result = call(db, "updateWhere", new JsString("d"), new JsString("c"), condition, patch);
+        assertEquals(4.0, assertInstanceOf(JsNumber.class, result).getValue());
+        assertEquals("updateWhere:d/c/status/2", fake.calls.getFirst());
+    }
+
+    @Test
+    public void test_delete_where_returns_the_count() {
+        final var fake = new FakeDatabaseAccess();
+        fake.nextDeletedCount = 7L;
+        final var db = DbModule.create(fake, null, null, null);
+        final var condition = new JsObject();
+        condition.set("fieldOperatorType", new JsString("EQUALS"));
+        condition.set("field", new JsString("status"));
+        condition.set("value", new JsString("archived"));
+        final var result = call(db, "deleteWhere", new JsString("d"), new JsString("c"), condition);
+        assertEquals(7.0, assertInstanceOf(JsNumber.class, result).getValue());
+        assertEquals("deleteWhere:d/c/status", fake.calls.getFirst());
+    }
+
+    @Test
     public void test_list_operations() {
         final var fake = new FakeDatabaseAccess();
         final var db = DbModule.create(fake, null, null, null);
@@ -124,6 +155,25 @@ public class DbModuleTest {
         final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
         assertThrows(TypeErrorException.class,
                 () -> call(db, "bulkSave", new JsString("d"), new JsString("c"), new JsString("nope")));
+    }
+
+    @Test
+    public void test_insert() {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        final var document = new JsObject();
+        document.set("_id", new JsString("i1"));
+        final var result = call(db, "insert", new JsString("d"), new JsString("c"), document);
+        assertInstanceOf(JsObject.class, result);
+        assertEquals("insert:d/c", fake.calls.getFirst());
+    }
+
+    @Test
+    public void test_insert_rejects_a_non_object_document() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        final var thrown = assertThrows(TypeErrorException.class,
+                () -> call(db, "insert", new JsString("d"), new JsString("c"), new JsNumber(5)));
+        assertEquals("db.insert expects a document", thrown.getMessage());
     }
 
     @Test
@@ -279,6 +329,40 @@ public class DbModuleTest {
     public void test_delete_with_a_null_id_is_a_type_error() {
         assertRefused("db.delete expects a string id", "delete", new JsString("d"), new JsString("c"),
                 JsNull.getInstance());
+    }
+
+    @Test
+    public void test_delete_where_without_a_condition_is_a_type_error_and_reaches_no_database_call() {
+        assertRefused("db.deleteWhere expects a condition object", "deleteWhere", new JsString("d"), new JsString("c"));
+    }
+
+    @Test
+    public void test_delete_where_with_an_array_condition_is_a_type_error() {
+        assertRefused("db.deleteWhere expects a condition object", "deleteWhere", new JsString("d"), new JsString("c"),
+                new JsArray());
+    }
+
+    @Test
+    public void test_delete_where_with_a_number_collection_is_a_type_error() {
+        assertRefused("db.deleteWhere expects a string collection name", "deleteWhere", new JsString("d"),
+                new JsNumber(1), new JsObject());
+    }
+
+    @Test
+    public void test_update_where_without_a_condition_is_a_type_error() {
+        assertRefused("db.updateWhere expects a condition object", "updateWhere", new JsString("d"), new JsString("c"));
+    }
+
+    @Test
+    public void test_update_where_without_a_patch_is_a_type_error() {
+        assertRefused("db.updateWhere expects an object of fields to set", "updateWhere", new JsString("d"),
+                new JsString("c"), new JsObject());
+    }
+
+    @Test
+    public void test_update_where_with_an_array_patch_is_a_type_error() {
+        assertRefused("db.updateWhere expects an object of fields to set", "updateWhere", new JsString("d"),
+                new JsString("c"), new JsObject(), new JsArray());
     }
 
     @Test

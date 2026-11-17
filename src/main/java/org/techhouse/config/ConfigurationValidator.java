@@ -33,10 +33,12 @@ public final class ConfigurationValidator {
         validateAdminPassword(configs, errors);
         validateCursorBatchSizes(configs, errors);
         validateTls(configs, errors);
+        validateMetricsPort(configs, errors);
         if (Boolean.parseBoolean(configs.getOrDefault("clusterEnabled", "false").trim())) {
             validateEnabledClusterConstraints(configs, errors);
         }
         validateScriptZoneAndLocale(configs, errors);
+        validatePowerLossShadow(configs, errors);
         return errors;
     }
 
@@ -83,6 +85,24 @@ public final class ConfigurationValidator {
         }
     }
 
+    private static void validatePowerLossShadow(Map<String, String> configs, List<String> errors) {
+        final var shadow = configs.get(ConfigKey.POWER_LOSS_SHADOW_PATH.key());
+        if (isBlank(shadow)) {
+            return;
+        }
+        if (!Boolean.parseBoolean(configs.getOrDefault("faultInjectionEnabled", "false").trim())) {
+            errors.add("powerLossShadowPath requires faultInjectionEnabled=true");
+        }
+        final var filePath = configs.get("filePath");
+        if (!isBlank(filePath) && isInside(Path.of(shadow.trim()), Path.of(filePath.trim()))) {
+            errors.add("powerLossShadowPath (" + shadow + ") must lie outside filePath (" + filePath + ")");
+        }
+    }
+
+    private static boolean isInside(Path candidate, Path folder) {
+        return candidate.toAbsolutePath().normalize().startsWith(folder.toAbsolutePath().normalize());
+    }
+
     private static void validateScriptZoneAndLocale(Map<String, String> configs, List<String> errors) {
         final var zone = configs.get("scriptTimeZone");
         if (isBlank(zone)) {
@@ -109,6 +129,24 @@ public final class ConfigurationValidator {
         if (Integer.parseInt(batchSize.trim()) > Integer.parseInt(maxBatchSize.trim())) {
             errors.add("scriptCursorBatchSize (" + batchSize + ") must not be greater than scriptCursorMaxBatchSize ("
                     + maxBatchSize + ")");
+        }
+    }
+
+    private static void validateMetricsPort(Map<String, String> configs, List<String> errors) {
+        final var metricsPort = parseIntOrNull(
+                configs.getOrDefault(ConfigKey.METRICS_PORT.key(), ConfigKey.METRICS_PORT.defaultValue()));
+        if (metricsPort == null || metricsPort == 0) {
+            return;
+        }
+        final var port = parseIntOrNull(configs.getOrDefault(ConfigKey.PORT.key(), ConfigKey.PORT.defaultValue()));
+        if (port != null && port.intValue() == metricsPort.intValue()) {
+            errors.add("metricsPort (" + metricsPort + ") must be different from port (" + port + ")");
+        }
+        final var clusterEnabled = Boolean.parseBoolean(configs.getOrDefault("clusterEnabled", "false").trim());
+        final var clusterPort = parseIntOrNull(
+                configs.getOrDefault(ConfigKey.CLUSTER_PORT.key(), ConfigKey.CLUSTER_PORT.defaultValue()));
+        if (clusterEnabled && clusterPort != null && clusterPort.intValue() == metricsPort.intValue()) {
+            errors.add("metricsPort (" + metricsPort + ") must be different from clusterPort (" + clusterPort + ")");
         }
     }
 

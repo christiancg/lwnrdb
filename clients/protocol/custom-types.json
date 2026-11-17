@@ -1,0 +1,10 @@
+{
+  "detectionRegex": "^#[a-zA-Z0-9]{3,20}\\(.*\\)$",
+  "geoDistanceComparators": ["EQUALS","GREATER_THAN","GREATER_THAN_EQUALS","SMALLER_THAN","SMALLER_THAN_EQUALS"],
+  "types": [
+    {"name":"datetime","predicateOperators":[],"rankingOperators":[]},
+    {"name":"geo","predicateOperators":["distance","within"],"rankingOperators":[]},
+    {"name":"time","predicateOperators":[],"rankingOperators":[]},
+    {"name":"vector","predicateOperators":[],"rankingOperators":["nearest"]}
+  ]
+}

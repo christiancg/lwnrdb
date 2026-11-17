@@ -3,9 +3,7 @@ package org.techhouse.ops.admin;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Consumer;
 import java.util.function.Function;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -21,23 +19,14 @@ public final class AdminRecordStore<T> {
     private final String collName;
     private final String recordLabel;
     private final Function<String, PkIndexEntry> pkLookup;
-    private final Consumer<String> pkRemove;
     private final Function<JsonObject, T> factory;
-    private final EntryCountUpdater entryCountUpdater;
 
     public AdminRecordStore(String collName, String recordLabel, Function<String, PkIndexEntry> pkLookup,
-            Consumer<String> pkRemove, Function<JsonObject, T> factory, EntryCountUpdater entryCountUpdater) {
+            Function<JsonObject, T> factory) {
         this.collName = collName;
         this.recordLabel = recordLabel;
         this.pkLookup = pkLookup;
-        this.pkRemove = pkRemove;
         this.factory = factory;
-        this.entryCountUpdater = entryCountUpdater;
-    }
-
-    public interface EntryCountUpdater {
-        void apply(String dbName, String collName, EventType type, List<DbEntry> entries)
-                throws IOException, InterruptedException;
     }
 
     public List<T> read(List<String> recordIds) throws IOException, InterruptedException {
@@ -55,26 +44,6 @@ public final class AdminRecordStore<T> {
                 result.add(factory.apply(data));
             }
             return result;
-        } finally {
-            locks.release(Globals.ADMIN_DB_NAME, collName);
-        }
-    }
-
-    public void delete(List<String> recordIds) throws IOException, InterruptedException {
-        locks.lock(Globals.ADMIN_DB_NAME, collName);
-        try {
-            for (var recordId : recordIds) {
-                final var pk = pkLookup.apply(recordId);
-                final var entry = pk == null ? null : readEntry(pk, recordId);
-                if (entry == null) {
-                    continue;
-                }
-                entry.setPage(pk.getPage());
-                entry.setPreviousByteSize(pk.getLength());
-                fs.deleteFromCollection(pk);
-                pkRemove.accept(recordId);
-                entryCountUpdater.apply(Globals.ADMIN_DB_NAME, collName, EventType.DELETED, List.of(entry));
-            }
         } finally {
             locks.release(Globals.ADMIN_DB_NAME, collName);
         }

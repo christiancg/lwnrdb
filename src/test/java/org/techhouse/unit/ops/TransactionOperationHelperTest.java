@@ -139,7 +139,8 @@ public class TransactionOperationHelperTest {
     public void test_isAllowedDuringTransaction_whitelist() {
         for (final var allowed : new OperationType[]{OperationType.START_TRANSACTION, OperationType.COMMIT_TRANSACTION,
                 OperationType.ROLLBACK_TRANSACTION, OperationType.SAVE, OperationType.BULK_SAVE, OperationType.DELETE,
-                OperationType.FIND_BY_ID, OperationType.AGGREGATE, OperationType.CLOSE_CONNECTION}) {
+                OperationType.FIND_BY_ID, OperationType.AGGREGATE, OperationType.CLOSE_CONNECTION,
+                OperationType.SERVER_INFO}) {
             assertTrue(TransactionOperationHelper.isAllowedDuringTransaction(allowed), allowed + " should be allowed");
         }
         for (final var blocked : new OperationType[]{OperationType.CREATE_COLLECTION, OperationType.DROP_COLLECTION,
@@ -151,7 +152,7 @@ public class TransactionOperationHelperTest {
     @Test
     public void test_isAllowedOnAbortedTransaction_whitelist() {
         for (final var allowed : new OperationType[]{OperationType.ROLLBACK_TRANSACTION,
-                OperationType.COMMIT_TRANSACTION, OperationType.CLOSE_CONNECTION}) {
+                OperationType.COMMIT_TRANSACTION, OperationType.CLOSE_CONNECTION, OperationType.SERVER_INFO}) {
             assertTrue(TransactionOperationHelper.isAllowedOnAbortedTransaction(allowed),
                     allowed + " should be allowed on an aborted transaction");
         }

@@ -8,15 +8,23 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
+import org.techhouse.ejson.type_adapters.impl.StringTypeAdapter;
 
 public class TypeAdapterFactoryTest {
+    @AfterEach
+    public void restoreTheShippedStringAdapter() {
+        TypeAdapterFactory.registerTypeAdapter(String.class, new StringTypeAdapter());
+    }
+
     @Test
     public void test_register_and_retrieve_type_adapter() {
         TypeAdapter<String> stringAdapter = new TypeAdapter<>() {
@@ -97,13 +105,14 @@ public class TypeAdapterFactoryTest {
 
     @Test
     public void test_get_adapter_for_custom_type() {
-        new org.techhouse.ejson.EJson(); // register custom types
+        new EJson(); // register custom types
         TypeAdapter<JsonTime> adapter = TypeAdapterFactory.getAdapter(JsonTime.class);
         assertNotNull(adapter);
     }
 
     @Test
     public void test_json_base_element_adapter_syntax_token_throws() {
+        new EJson();
         TypeAdapter<JsonBaseElement> adapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
         assertThrows(IllegalStateException.class, () -> adapter.toJson(JsonSyntaxToken.COMMA));
     }

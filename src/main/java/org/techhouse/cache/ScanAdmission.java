@@ -21,6 +21,8 @@ final class ScanAdmission implements Spliterator<DbEntry> {
 
     interface Completion {
         void admit(ConcurrentHashMap<String, DbEntry> collected, long measuredBytes);
+
+        void refuse(long reachedBytes);
     }
 
     private final Iterator<AdminPageEntry> pages;
@@ -30,6 +32,8 @@ final class ScanAdmission implements Spliterator<DbEntry> {
     private Completion completion;
     private ConcurrentHashMap<String, DbEntry> collected;
     private long collectedBytes;
+    private final long totalLiveBytes;
+    private long readLiveBytes;
     private Iterator<DbEntry> current = Collections.emptyIterator();
 
     ScanAdmission(List<AdminPageEntry> sortedPages, boolean inScanOrder, PageReader reader,
@@ -40,6 +44,15 @@ final class ScanAdmission implements Spliterator<DbEntry> {
         this.memoryManagement = memoryManagement;
         this.completion = completion;
         this.collected = completion == null ? null : new ConcurrentHashMap<>();
+        this.totalLiveBytes = completion == null ? 0L : liveBytesOf(sortedPages);
+    }
+
+    static long liveBytesOf(List<AdminPageEntry> pages) {
+        var live = 0L;
+        for (final var page : pages) {
+            live += Math.max(0L, page.getPageSize());
+        }
+        return live;
     }
 
     @Override
@@ -72,7 +85,9 @@ final class ScanAdmission implements Spliterator<DbEntry> {
     private Iterator<DbEntry> nextPage() {
         final Collection<DbEntry> page;
         try {
-            page = reader.read(pages.next().getPage());
+            final var pageEntry = pages.next();
+            readLiveBytes += Math.max(0L, pageEntry.getPageSize());
+            page = reader.read(pageEntry.getPage());
         } catch (IOException e) {
             abandon();
             throw new RuntimeException(e);
@@ -90,7 +105,9 @@ final class ScanAdmission implements Spliterator<DbEntry> {
             return;
         }
         final var pageBytes = CacheSizeEstimator.estimateCollectionEntries(page);
-        if (memoryManagement.admissionCheck(collectedBytes + pageBytes) != AdmissionDecision.ADMIT) {
+        final var projected = projectedWholeBytes(collectedBytes + pageBytes);
+        if (memoryManagement.admissionCheck(projected) != AdmissionDecision.ADMIT) {
+            completion.refuse(projected);
             abandon();
             return;
         }
@@ -98,6 +115,13 @@ final class ScanAdmission implements Spliterator<DbEntry> {
             collected.put(entry.get_id(), entry);
         }
         collectedBytes += pageBytes;
+    }
+
+    private long projectedWholeBytes(long withPage) {
+        if (readLiveBytes <= 0L || totalLiveBytes <= readLiveBytes) {
+            return withPage;
+        }
+        return (long) ((double) withPage * totalLiveBytes / readLiveBytes);
     }
 
     private void abandon() {

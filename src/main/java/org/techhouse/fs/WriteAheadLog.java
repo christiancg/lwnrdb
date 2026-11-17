@@ -2,20 +2,15 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
+import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Objects;
 import java.util.concurrent.locks.Lock;
 import java.util.function.LongFunction;
+import java.util.function.Predicate;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.fault.FaultInjector;
@@ -25,28 +20,16 @@ import org.techhouse.log.Logger;
 
 final class WriteAheadLog {
     private static final Logger logger = Logger.logFor(WriteAheadLog.class);
-    private static final Map<String, LogState> states = new ConcurrentHashMap<>();
     private static volatile CheckpointGuard guard = CheckpointGuard.NO_INDEX_WORK;
     private final Configuration configuration = Configuration.getInstance();
     private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
 
     private final FilePaths paths;
+    private volatile LogPath lastLog;
 
-    private static final class LogState {
-        private final String dbName;
-        private final String collName;
-        private final Set<Long> touchedPages = new HashSet<>();
-        private long nextSeq = 1L;
-        private long knownLength;
-        private int recordsSinceCheckpoint;
-        private boolean unapplied;
-        private boolean groupBaseLogged;
-        private WalWriteGroup group;
-        private volatile long lastWriteMillis;
-
-        private LogState(String dbName, String collName) {
-            this.dbName = dbName;
-            this.collName = collName;
+    private record LogPath(String root, String dbName, String collName, File file, String key) {
+        private boolean names(String otherRoot, String otherDb, String otherColl) {
+            return dbName.equals(otherDb) && collName.equals(otherColl) && Objects.equals(root, otherRoot);
         }
     }
 
@@ -54,60 +37,80 @@ final class WriteAheadLog {
         this.paths = paths;
     }
 
+    private LogPath logOf(String dbName, String collName) {
+        final var root = paths.dbPath();
+        final var last = lastLog;
+        if (last != null && last.names(root, dbName, collName)) {
+            return last;
+        }
+        final var file = paths.writeAheadLog(dbName, collName);
+        final var made = new LogPath(root, dbName, collName, file, file.getAbsolutePath());
+        lastLog = made;
+        return made;
+    }
+
+    private static WalLogState stateOf(LogPath log) throws IOException {
+        return WalLogState.of(log.file(), log.key(), log.dbName(), log.collName());
+    }
+
     Lock lock(String dbName, String collName) {
-        return FileLocks.lockWrite(paths.writeAheadLog(dbName, collName));
+        return FileLocks.lockWrite(logOf(dbName, collName).file());
     }
 
     long append(String dbName, String collName, WalCodec.RecordBuffer record, Collection<Long> pages)
             throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
-        var state = stateOf(log, dbName, collName);
-        if (state.knownLength == 0L) {
-            checkpoint(dbName, collName);
-            state = stateOf(log, dbName, collName);
-        }
+        final var log = logOf(dbName, collName);
+        var state = stateOf(log);
         if (state.group != null && state.group.failed()) {
             throw new IOException("An earlier write grouped with this one on " + subject(dbName, collName)
                     + " could not be made durable, so the group is refused");
         }
+        if (state.knownLength == 0L || ForceFailures.hasFailed(log.file().toPath())) {
+            checkpoint(dbName, collName);
+            state = stateOf(log);
+        }
+        if (state.group != null && state.group.idle()) {
+            state.group.restartFrom(state.knownLength);
+        }
         if (state.group != null && !state.groupBaseLogged) {
-            logGroupBase(dbName, collName, log, state);
+            logGroupBase(dbName, collName, log.file(), state);
         }
         final var seq = state.nextSeq;
-        write(log, state, record.header(seq), record.bytes(), record.size(), state.group == null);
+        record.frame(seq);
+        write(log.file(), state, record.bytes(), record.size(), state.group == null);
         state.nextSeq++;
         state.recordsSinceCheckpoint++;
         state.touchedPages.addAll(pages);
         if (state.group != null) {
             state.group.recorded();
         }
-        faultInjector.at(FaultPoint.WAL_APPENDED, subject(dbName, collName));
+        faultInjector.at(FaultPoint.WAL_APPENDED, dbName, collName);
         return seq;
     }
 
     void abort(String dbName, String collName, long seq) throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
-        final var state = stateOf(log, dbName, collName);
+        final var log = logOf(dbName, collName);
+        final var state = stateOf(log);
         final var frame = WalCodec.encodeAbort(state.nextSeq, seq);
-        write(log, state, frame, new byte[0], 0, state.group == null);
+        write(log.file(), state, frame, frame.length, state.group == null);
         state.nextSeq++;
         state.recordsSinceCheckpoint++;
     }
 
-    private void logGroupBase(String dbName, String collName, File log, LogState state) throws IOException {
+    private void logGroupBase(String dbName, String collName, File log, WalLogState state) throws IOException {
         final var pkIndex = paths.pkIndexFile(dbName, collName);
         final var frame = WalCodec.encodeGroupBase(state.nextSeq, pkIndex.exists() ? pkIndex.length() : 0L);
-        write(log, state, frame, new byte[0], 0, true);
+        write(log, state, frame, frame.length, true);
         state.nextSeq++;
         state.groupBaseLogged = true;
-        state.group.restartFrom(state.knownLength);
+        state.group.rebase(state.knownLength);
     }
 
     void openGroup(String dbName, String collName) throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
-        final var lock = FileLocks.lockWrite(log);
+        final var log = logOf(dbName, collName);
+        final var lock = FileLocks.lockWrite(log.file());
         try {
-            final var state = stateOf(log, dbName, collName);
+            final var state = stateOf(log);
             if (state.group == null) {
                 state.group = new WalWriteGroup(state.knownLength);
             }
@@ -117,18 +120,18 @@ final class WriteAheadLog {
     }
 
     boolean closeGroup(String dbName, String collName) throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
+        final var log = logOf(dbName, collName);
         final var pkLock = FileLocks.lockWrite(paths.pkIndexFile(dbName, collName));
-        final var walLock = FileLocks.lockWrite(log);
+        final var walLock = FileLocks.lockWrite(log.file());
         try {
-            final var state = stateOf(log, dbName, collName);
+            final var state = stateOf(log);
             if (state.group == null) {
                 return true;
             }
             try {
-                return settle(dbName, collName, log, state);
+                return settle(dbName, collName, log.file(), state);
             } finally {
-                state.group = null;
+                state.endGroup();
             }
         } finally {
             walLock.unlock();
@@ -137,25 +140,25 @@ final class WriteAheadLog {
     }
 
     boolean forceGroup(String dbName, String collName) throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
-        final var walLock = FileLocks.lockWrite(log);
+        final var log = logOf(dbName, collName);
+        final var walLock = FileLocks.lockWrite(log.file());
         try {
-            final var group = stateOf(log, dbName, collName).group;
+            final var group = stateOf(log).group;
             if (group == null || group.forced() || !group.failed() && group.idle()) {
                 return true;
             }
-            return !group.failed() && forceOpenGroup(dbName, collName, log, group);
+            return !group.failed() && forceOpenGroup(dbName, collName, log.file(), group);
         } finally {
             walLock.unlock();
         }
     }
 
     WalWriteGroup openGroupOf(String dbName, String collName) {
-        final var state = states.get(paths.writeAheadLog(dbName, collName).getAbsolutePath());
+        final var state = WalLogState.known(logOf(dbName, collName).key());
         return state == null ? null : state.group;
     }
 
-    private boolean settle(String dbName, String collName, File log, LogState state) {
+    private boolean settle(String dbName, String collName, File log, WalLogState state) {
         final var group = state.group;
         if (group.failed()) {
             takeBack(dbName, collName, log, state);
@@ -176,23 +179,23 @@ final class WriteAheadLog {
     }
 
     private boolean forceOpenGroup(String dbName, String collName, File log, WalWriteGroup group) {
-        faultInjector.at(FaultPoint.WAL_GROUP_APPENDED, subject(dbName, collName));
+        faultInjector.at(FaultPoint.WAL_GROUP_APPENDED, dbName, collName);
         try {
-            forceLog(log);
+            group.forceLog(log);
         } catch (IOException e) {
             logger.error("Could not force the write-ahead log of " + subject(dbName, collName) + " for a group of "
                     + group.records() + " write(s); the group is taken back and every one of them fails", e);
             group.fail();
             return false;
         }
-        faultInjector.at(FaultPoint.WAL_GROUP_FORCED, subject(dbName, collName));
+        faultInjector.at(FaultPoint.WAL_GROUP_FORCED, dbName, collName);
         group.markForced();
         return true;
     }
 
-    private void takeBack(String dbName, String collName, File log, LogState state) {
+    private void takeBack(String dbName, String collName, File log, WalLogState state) {
         final var group = state.group;
-        if (group.takeBack(log, paths.pkIndexFile(dbName, collName))) {
+        if (group.takeBack(log, state.knownLength, paths.pkIndexFile(dbName, collName))) {
             state.recordsSinceCheckpoint = Math.max(0, state.recordsSinceCheckpoint - group.records());
             state.knownLength = group.logLengthBefore();
         } else {
@@ -203,70 +206,72 @@ final class WriteAheadLog {
         group.restartFrom(state.knownLength);
     }
 
-    private static void forceLog(File log) throws IOException {
-        try (var channel = FileChannel.open(log.toPath(), StandardOpenOption.WRITE)) {
-            SyncedWrites.content(channel, log.toPath());
-        }
-    }
-
-    private static void write(File log, LogState state, byte[] header, byte[] payload, int payloadLength, boolean force)
-            throws IOException {
-        var appended = false;
+    private static void write(File log, WalLogState state, byte[] frame, int length, boolean force) throws IOException {
+        final var at = state.knownLength;
+        var written = false;
         try {
-            try (var channel = FileChannel.open(log.toPath(), StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
-                final var buffers = new ByteBuffer[]{ByteBuffer.wrap(header),
-                        ByteBuffer.wrap(payload, 0, payloadLength)};
-                var unwritten = (long) header.length + payloadLength;
-                while (unwritten > 0) {
-                    unwritten -= channel.write(buffers);
+            if (state.group == null) {
+                try (var channel = WalWriteGroup.openWritable(log)) {
+                    state.allocatedLength = WalWriteGroup.writeFrame(channel, log, at, state.allocatedLength, frame,
+                            length, force);
                 }
-                if (force) {
-                    SyncedWrites.content(channel, log.toPath());
-                }
+            } else {
+                state.allocatedLength = state.group.write(log, at, state.allocatedLength, frame, length, force);
             }
-            appended = true;
+            written = true;
         } finally {
-            if (!appended && log.length() != state.knownLength) {
-                FileLocks.truncateTo(log, state.knownLength, "Could not roll back a partial append to the"
-                        + " write-ahead log " + log.getPath() + "; the next startup cuts it");
+            if (!written) {
+                if (!WalWriteGroup.erase(log, at, Math.min(at + length, log.length()),
+                        "Could not erase a partial append to the write-ahead log " + log.getPath()
+                                + "; the next startup cuts it")) {
+                    state.reseedOnNextUse();
+                }
+                state.allocatedLength = Math.max(at, log.length());
             }
         }
-        state.knownLength += header.length + payloadLength;
+        //noinspection NonAtomicOperationOnVolatileField
+        state.knownLength += length;
         state.lastWriteMillis = System.currentTimeMillis();
     }
 
     void markUnapplied(String dbName, String collName) {
-        final var state = states.get(paths.writeAheadLog(dbName, collName).getAbsolutePath());
+        final var state = WalLogState.known(logOf(dbName, collName).key());
         if (state != null) {
             state.unapplied = true;
         }
     }
 
-    void requireApplied(String dbName, String collName) throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
-        final var known = states.get(log.getAbsolutePath());
+    boolean requireApplied(String dbName, String collName) throws IOException {
+        final var log = logOf(dbName, collName);
+        final var known = WalLogState.known(log.key());
         if (known == null || !known.unapplied) {
-            return;
+            DeferredApplies.clear(dbName, collName);
+            return false;
         }
         final var pkLock = FileLocks.lockWrite(paths.pkIndexFile(dbName, collName));
-        final var walLock = FileLocks.lockWrite(log);
+        final var walLock = FileLocks.lockWrite(log.file());
         try {
-            final var state = stateOf(log, dbName, collName);
-            if (state.unapplied && !log.exists()) {
+            final var state = stateOf(log);
+            if (state.unapplied && !log.file().exists()) {
                 state.unapplied = false;
+                DeferredApplies.clear(dbName, collName);
                 logger.warning("The write-ahead log of " + subject(dbName, collName) + " is gone, so the writes it"
                         + " held can no longer be applied");
             } else if (state.unapplied) {
-                if (state.group != null && !settle(dbName, collName, log, state)) {
+                if (state.group != null && !settle(dbName, collName, log.file(), state)) {
                     throw new IOException("Could not make the open write group of " + subject(dbName, collName)
                             + " durable before applying its logged writes");
                 }
-                forceLog(log);
-                WalRedo.replay(paths, dbName, collName, WalCodec.decodeAll(Files.readAllBytes(log.toPath())));
+                WalWriteGroup.forceUnheld(log.file());
+                DeferredApplies.replay(paths, dbName, collName,
+                        WalCodec.decodeAll(Files.readAllBytes(log.file().toPath())));
                 state.unapplied = false;
+                DeferredApplies.clear(dbName, collName);
                 logger.warning("Applied the logged writes of " + subject(dbName, collName) + " that an earlier write"
                         + " could not");
+                return true;
             }
+            return false;
         } finally {
             walLock.unlock();
             pkLock.unlock();
@@ -274,49 +279,63 @@ final class WriteAheadLog {
     }
 
     void settleBeforeRewrite(String dbName, String collName) throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
+        final var log = logOf(dbName, collName);
         final var pkLock = FileLocks.lockWrite(paths.pkIndexFile(dbName, collName));
-        final var walLock = FileLocks.lockWrite(log);
+        final var walLock = FileLocks.lockWrite(log.file());
         try {
             requireApplied(dbName, collName);
-            final var state = stateOf(log, dbName, collName);
-            if (state.knownLength == 0L) {
+            final var state = stateOf(log);
+            if (state.knownLength == 0L || ForceFailures.hasFailed(log.file().toPath())) {
                 checkpoint(dbName, collName);
             }
             if (state.group != null) {
-                if (!settle(dbName, collName, log, state)) {
+                if (!settle(dbName, collName, log.file(), state)) {
                     throw new IOException("Could not force the open write group of " + subject(dbName, collName)
                             + " before rewriting one of its pages; its writes were taken back");
                 }
-                state.group = null;
+                state.endGroup();
             }
             requireApplied(dbName, collName);
+            FailedForceRebuild.rebuildFailed(paths, dbName, collName, log.file());
         } finally {
             walLock.unlock();
             pkLock.unlock();
         }
     }
 
-    long beginRewrite(String dbName, String collName, long page, long lengthBefore) throws IOException {
-        SyncedWrites.content(paths.collectionPage(dbName, collName, page).toPath());
-        return appendFrame(dbName, collName, seq -> WalCodec.encodeRewriteBegin(seq, page, lengthBefore), true);
+    long beginRewrite(String dbName, String collName, long page, long lengthBefore, ForceGroup alongside)
+            throws IOException {
+        alongside.add(paths.collectionPage(dbName, collName, page).toPath());
+        alongside.force();
+        return appendFrame(dbName, collName, seq -> WalCodec.encodeRewriteBegin(seq, page, lengthBefore), true, page);
+    }
+
+    void rewriteLanded(String dbName, String collName, long page) {
+        final var state = WalLogState.known(logOf(dbName, collName).key());
+        if (state != null) {
+            state.openRewrites.remove(page);
+        }
     }
 
     void endRewrite(String dbName, String collName, long beginSeq, long page, long lengthAfter, boolean force)
             throws IOException {
-        appendFrame(dbName, collName, seq -> WalCodec.encodeRewriteEnd(seq, beginSeq, page, lengthAfter), force);
+        appendFrame(dbName, collName, seq -> WalCodec.encodeRewriteEnd(seq, beginSeq, page, lengthAfter), force, null);
     }
 
-    private long appendFrame(String dbName, String collName, LongFunction<byte[]> frame, boolean force)
-            throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
-        final var walLock = FileLocks.lockWrite(log);
+    private long appendFrame(String dbName, String collName, LongFunction<byte[]> frame, boolean force,
+            Long openedRewrite) throws IOException {
+        final var log = logOf(dbName, collName);
+        final var walLock = FileLocks.lockWrite(log.file());
         try {
-            final var state = stateOf(log, dbName, collName);
+            final var state = stateOf(log);
             final var seq = state.nextSeq;
-            write(log, state, frame.apply(seq), new byte[0], 0, force);
+            final var bytes = frame.apply(seq);
+            write(log.file(), state, bytes, bytes.length, force);
             state.nextSeq++;
             state.recordsSinceCheckpoint++;
+            if (openedRewrite != null) {
+                state.openRewrites.add(openedRewrite);
+            }
             return seq;
         } finally {
             walLock.unlock();
@@ -324,10 +343,10 @@ final class WriteAheadLog {
     }
 
     void track(String dbName, String collName) throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
-        final var lock = FileLocks.lockWrite(log);
+        final var log = logOf(dbName, collName);
+        final var lock = FileLocks.lockWrite(log.file());
         try {
-            stateOf(log, dbName, collName);
+            stateOf(log);
         } finally {
             lock.unlock();
         }
@@ -338,14 +357,21 @@ final class WriteAheadLog {
     }
 
     void checkpointIfFull(String dbName, String collName) {
-        final var state = states.get(paths.writeAheadLog(dbName, collName).getAbsolutePath());
-        if (state != null && state.knownLength > configuration.getWalCheckpointBytes()) {
-            try {
-                checkpoint(dbName, collName);
-            } catch (IOException e) {
-                logger.error("Could not checkpoint the full write-ahead log of " + subject(dbName, collName)
-                        + "; it keeps its records and the next write or the shutdown retries", e);
-            }
+        final var log = logOf(dbName, collName);
+        final var state = WalLogState.known(log.key());
+        final var limit = configuration.getWalCheckpointBytes();
+        if (state == null || state.lengthBeyondPending() <= limit) {
+            return;
+        }
+        if (state.lengthBeyondPending() / Globals.WAL_SYNC_CHECKPOINT_FACTOR <= limit) {
+            WalCheckpointRequests.request(log.key(), dbName, collName);
+            return;
+        }
+        try {
+            checkpoint(dbName, collName);
+        } catch (IOException e) {
+            logger.error("Could not checkpoint the full write-ahead log of " + subject(dbName, collName)
+                    + "; it keeps its records and the next write or the shutdown retries", e);
         }
     }
 
@@ -353,18 +379,26 @@ final class WriteAheadLog {
         if (!paths.collectionFolder(dbName, collName).isDirectory()) {
             return;
         }
-        final var log = paths.writeAheadLog(dbName, collName);
+        final var log = logOf(dbName, collName);
         final var pkIndex = paths.pkIndexFile(dbName, collName);
         final var pkLock = FileLocks.lockWrite(pkIndex);
-        final var walLock = FileLocks.lockWrite(log);
+        final var walLock = FileLocks.lockWrite(log.file());
         try {
             requireApplied(dbName, collName);
-            final var state = stateOf(log, dbName, collName);
-            if (state.group != null && !settle(dbName, collName, log, state)) {
-                throw new IOException("Could not force the open write group of " + subject(dbName, collName)
-                        + " before a checkpoint; its writes were taken back");
+            final var state = stateOf(log);
+            state.refuseWhileRewriting(subject(dbName, collName));
+            if (state.group != null) {
+                final var carriedWrites = !state.group.idle();
+                if (!settle(dbName, collName, log.file(), state)) {
+                    throw new IOException("Could not force the open write group of " + subject(dbName, collName)
+                            + " before a checkpoint; its writes were taken back");
+                }
+                if (carriedWrites) {
+                    state.endGroup();
+                }
             }
-            if (state.knownLength > 0L && state.recordsSinceCheckpoint == 0 && !state.groupBaseLogged) {
+            FailedForceRebuild.rebuildFailed(paths, dbName, collName, log.file());
+            if (!isDirty(state)) {
                 return;
             }
             final var pending = List.copyOf(guard.pendingIds(dbName, collName));
@@ -380,18 +414,19 @@ final class WriteAheadLog {
             }
             FieldIndexLog.forceUnforced(paths.collectionFolder(dbName, collName), group);
             group.force();
-            faultInjector.at(FaultPoint.WAL_CHECKPOINT_FORCED, subject(dbName, collName));
+            faultInjector.at(FaultPoint.WAL_CHECKPOINT_FORCED, dbName, collName);
             final var checkpointFrame = WalCodec
                     .encode(new WalCheckpoint(state.nextSeq, dbName, collName, pkIndex.exists() ? pkIndex.length() : 0L,
                             DocumentPageStore.pageFileLengths(paths, dbName, collName)));
-            final var bytes = pending.isEmpty()
-                    ? checkpointFrame
-                    : concat(checkpointFrame, WalCodec.encodePending(state.nextSeq + 1, pending));
-            FileLocks.rewriteFileAtomically(log.toPath(), bytes);
+            final var bytes = WalCodec.withPending(checkpointFrame, state.nextSeq + 1, pending);
+            FileLocks.rewriteFileAtomically(log.file().toPath(), bytes);
             state.nextSeq += pending.isEmpty() ? 1 : 2;
             state.knownLength = bytes.length;
+            state.allocatedLength = bytes.length;
             state.recordsSinceCheckpoint = 0;
             state.groupBaseLogged = false;
+            state.pendingLogged = !pending.isEmpty();
+            state.pendingFrameBytes = bytes.length - checkpointFrame.length;
             state.touchedPages.clear();
             if (state.group != null) {
                 state.group.restartFrom(state.knownLength);
@@ -402,20 +437,13 @@ final class WriteAheadLog {
         }
     }
 
-    private static byte[] concat(byte[] first, byte[] second) {
-        final var joined = Arrays.copyOf(first, first.length + second.length);
-        System.arraycopy(second, 0, joined, first.length, second.length);
-        return joined;
-    }
-
     record WalLogStatus(String dbName, String collName, boolean dirty, boolean grouped, long lastWriteMillis) {
     }
 
     List<WalLogStatus> statusesUnder(String root) {
         final var statuses = new ArrayList<WalLogStatus>();
-        for (final var entry : states.entrySet()) {
-            if (entry.getKey().startsWith(root)) {
-                final var state = entry.getValue();
+        for (final var state : WalLogState.all()) {
+            if (state.path.startsWith(root)) {
                 statuses.add(new WalLogStatus(state.dbName, state.collName, isDirty(state), state.group != null,
                         state.lastWriteMillis));
             }
@@ -423,8 +451,10 @@ final class WriteAheadLog {
         return statuses;
     }
 
-    private static boolean isDirty(LogState state) {
-        return state.recordsSinceCheckpoint > 0 || state.groupBaseLogged || state.knownLength == 0L;
+    private static boolean isDirty(WalLogState state) {
+        return state.recordsSinceCheckpoint > 0 || state.groupBaseLogged || state.knownLength == 0L
+                || state.pendingLogged && !guard.holdsIndexWork(state.dbName, state.collName)
+                || ForceFailures.hasFailed(Path.of(state.path));
     }
 
     static boolean holdsIndexWork(String dbName, String collName) {
@@ -432,13 +462,22 @@ final class WriteAheadLog {
     }
 
     boolean checkpointIfIdle(String dbName, String collName, long idleMillis) throws IOException {
-        final var log = paths.writeAheadLog(dbName, collName);
+        return checkpointWhen(dbName, collName, state -> state.group == null && isDirty(state)
+                && System.currentTimeMillis() - state.lastWriteMillis >= idleMillis);
+    }
+
+    boolean checkpointRequested(String dbName, String collName) throws IOException {
+        return checkpointWhen(dbName, collName, state -> state.group == null && !state.unapplied
+                && state.lengthBeyondPending() > configuration.getWalCheckpointBytes());
+    }
+
+    private boolean checkpointWhen(String dbName, String collName, Predicate<WalLogState> due) throws IOException {
+        final var log = logOf(dbName, collName);
         final var pkLock = FileLocks.lockWrite(paths.pkIndexFile(dbName, collName));
-        final var walLock = FileLocks.lockWrite(log);
+        final var walLock = FileLocks.lockWrite(log.file());
         try {
-            final var state = states.get(log.getAbsolutePath());
-            if (state == null || state.group != null || !isDirty(state)
-                    || System.currentTimeMillis() - state.lastWriteMillis < idleMillis) {
+            final var state = WalLogState.known(log.key());
+            if (state == null || !due.test(state)) {
                 return false;
             }
             checkpoint(dbName, collName);
@@ -450,45 +489,9 @@ final class WriteAheadLog {
     }
 
     static void forgetUnder(File folder) {
-        final var prefix = folder.getAbsolutePath() + File.separator;
-        states.keySet().removeIf(path -> path.startsWith(prefix));
-    }
-
-    private static LogState stateOf(File log, String dbName, String collName) throws IOException {
-        final var state = states.computeIfAbsent(log.getAbsolutePath(), _ -> new LogState(dbName, collName));
-        if (log.length() != state.knownLength) {
-            reseed(log, state);
-        }
-        return state;
-    }
-
-    private static void reseed(File log, LogState state) throws IOException {
-        state.touchedPages.clear();
-        state.recordsSinceCheckpoint = 0;
-        if (!log.exists()) {
-            state.knownLength = 0L;
-            return;
-        }
-        final var decoded = WalCodec.decodeAll(Files.readAllBytes(log.toPath()));
-        if (decoded.checkpoint() == null) {
-            state.knownLength = 0L;
-            return;
-        }
-        if (decoded.cleanLength() != log.length()) {
-            FileLocks.truncateTo(log, decoded.cleanLength(), "Could not cut the torn end of the write-ahead log "
-                    + log.getPath() + "; the next startup cuts it");
-        }
-        for (final var record : decoded.records()) {
-            for (final var change : record.changes()) {
-                if (change.target() != WalTarget.PK_WRITE) {
-                    state.touchedPages.add(change.page());
-                }
-            }
-        }
-        state.recordsSinceCheckpoint = decoded.framesSinceCheckpoint();
-        state.groupBaseLogged = decoded.groupBase() != WalCodec.NO_GROUP_BASE;
-        state.nextSeq = Math.max(state.nextSeq, decoded.lastSeq() + 1);
-        state.knownLength = log.length();
+        WalLogState.forgetUnder(folder);
+        WalCheckpointRequests.forgetUnder(folder);
+        ForceFailures.forgetUnder(folder);
     }
 
     static String subject(String dbName, String collName) {

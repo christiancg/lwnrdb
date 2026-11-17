@@ -13,6 +13,8 @@ import java.util.regex.Pattern;
 final class JavaSources {
     static final Path MAIN = Path.of("src/main/java");
     static final Path TEST = Path.of("src/test/java");
+    static final Path CLIENTS = Path.of("clients");
+    private static final int CLIENT_SOURCE_ROOT_DEPTH = 6;
     private static final Pattern PACKAGE_DECLARATION = Pattern.compile("^\\s*package\\s+([\\w.]+)\\s*;",
             Pattern.MULTILINE);
 
@@ -36,6 +38,23 @@ final class JavaSources {
             }
         }
         return files;
+    }
+
+    static Path[] serverAndClientSources() {
+        final var all = new ArrayList<>(List.of(MAIN, TEST));
+        if (Files.isDirectory(CLIENTS)) {
+            try (var paths = Files.walk(CLIENTS, CLIENT_SOURCE_ROOT_DEPTH)) {
+                paths.filter(Files::isDirectory).filter(JavaSources::isClientSourceRoot).sorted().forEach(all::add);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+        return all.toArray(Path[]::new);
+    }
+
+    private static boolean isClientSourceRoot(Path path) {
+        final var text = path.toString().replace('\\', '/');
+        return !text.contains("/target/") && (text.endsWith("/src/main/java") || text.endsWith("/src/test/java"));
     }
 
     static JavaSourceFile parse(String relativePath, String source) {

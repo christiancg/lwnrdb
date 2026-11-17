@@ -105,7 +105,7 @@ public class ScanPreferenceTest {
                             TestGlobals.DB, COLL, context));
             assertFalse(ScanPreference.prefersScan(field(FieldOperatorType.SMALLER_THAN, "num", new JsonNumber(100)),
                     TestGlobals.DB, COLL, context));
-            assertFalse(ScanPreference.prefersScan(field(FieldOperatorType.NOT_EQUALS, "half", new JsonString("x")),
+            assertTrue(ScanPreference.prefersScan(field(FieldOperatorType.NOT_EQUALS, "half", new JsonString("x")),
                     TestGlobals.DB, COLL, context));
             assertFalse(ScanPreference.prefersScan(field(FieldOperatorType.EQUALS, "_id", new JsonString("p1")),
                     TestGlobals.DB, COLL, context));
@@ -122,6 +122,40 @@ public class ScanPreferenceTest {
             assertFalse(ScanPreference.prefersScan(field(FieldOperatorType.EQUALS, "half", new JsonString("even")),
                     TestGlobals.DB, COLL, context));
         }
+    }
+
+    @Test
+    public void complementPastFallbackScans() throws Exception {
+        final var mostNumbers = new JsonArray();
+        for (var i = 0; i < 4_000; i++) {
+            mostNumbers.add(new JsonNumber(i));
+        }
+        final var fewNumbers = new JsonArray();
+        fewNumbers.add(new JsonNumber(1));
+        fewNumbers.add(new JsonNumber(2));
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
+            assertTrue(ScanPreference.prefersScan(field(FieldOperatorType.NOT_IN, "num", fewNumbers), TestGlobals.DB,
+                    COLL, context));
+            assertTrue(ScanPreference.prefersScan(field(FieldOperatorType.NOT_EQUALS, "num", new JsonNumber(7)),
+                    TestGlobals.DB, COLL, context));
+            assertFalse(ScanPreference.prefersScan(field(FieldOperatorType.NOT_IN, "num", mostNumbers), TestGlobals.DB,
+                    COLL, context));
+            assertFalse(ScanPreference.prefersScan(field(FieldOperatorType.NOT_EQUALS, "half", new JsonNumber(7)),
+                    TestGlobals.DB, COLL, context));
+            assertFalse(ScanPreference.prefersScan(field(FieldOperatorType.NOT_IN, "num", new JsonArray()),
+                    TestGlobals.DB, COLL, context));
+            assertFalse(ScanPreference.prefersScan(field(FieldOperatorType.NOT_EQUALS, "half", new JsonObject()),
+                    TestGlobals.DB, COLL, context));
+        }
+    }
+
+    @Test
+    public void test_a_group_by_prefers_the_scan_on_a_large_collection_cached_or_not() throws Exception {
+        cache.getWholeCollection(TestGlobals.DB, COLL);
+        assertTrue(ScanPreference.groupByPrefersScan(TestGlobals.DB, COLL));
+        assertFalse(ScanPreference.groupByPrefersScan(TestGlobals.DB, SMALL));
+        TestUtils.setPrivateField(configuration, "indexScanFallbackPercent", 100);
+        assertFalse(ScanPreference.groupByPrefersScan(TestGlobals.DB, COLL));
     }
 
     @Test

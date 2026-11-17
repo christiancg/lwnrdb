@@ -20,6 +20,7 @@ public final class Tx2pcLog {
     private static final String PARTICIPANTS_FIELD = "participants";
     private static final String SESSION_ID_FIELD = "sessionId";
     private static final String PREPARED_AT_FIELD = "preparedAt";
+    private static final String OP_IDS_FIELD = "opIds";
     private static final String OUTCOME_FIELD = "outcome";
     private static final String RESOLVED_AT_FIELD = "resolvedAt";
     private static final String OUTCOME_COMMITTED = "committed";
@@ -42,15 +43,23 @@ public final class Tx2pcLog {
 
     public static void recordParticipantPrepared(String dtxId, String coordinatorAddress, List<String> participants,
             List<String> collections) throws Exception {
-        recordParticipantPrepared(dtxId, coordinatorAddress, participants, collections, List.of());
+        recordParticipantPrepared(dtxId, coordinatorAddress, participants, collections, List.of(), null);
     }
 
     public static void recordParticipantPrepared(String dtxId, String coordinatorAddress, List<String> participants,
             List<String> collections, List<AdminTransactionEntry> ops) throws Exception {
+        recordParticipantPrepared(dtxId, coordinatorAddress, participants, collections, ops, null);
+    }
+
+    public static void recordParticipantPrepared(String dtxId, String coordinatorAddress, List<String> participants,
+            List<String> collections, List<AdminTransactionEntry> ops, List<String> opIds) throws Exception {
         final var payload = new JsonObject();
         payload.addProperty(COORDINATOR_ADDRESS_FIELD, coordinatorAddress);
         payload.add(PARTICIPANTS_FIELD, stringArray(participants));
         payload.add(COLLECTIONS_FIELD, stringArray(collections));
+        if (opIds != null) {
+            payload.add(OP_IDS_FIELD, stringArray(opIds));
+        }
         payload.addProperty(PREPARED_AT_FIELD, Long.toString(System.currentTimeMillis()));
         final var records = new ArrayList<>(ops);
         records.add(AdminTransactionEntry.marker(dtxId, AdminTransactionEntry.MARKER_PARTICIPANT,
@@ -125,19 +134,23 @@ public final class Tx2pcLog {
     }
 
     public static void garbageCollectOutcomes(long retentionMs) throws Exception {
-        final var cutoff = System.currentTimeMillis() - retentionMs;
-        for (final var dtxId : dtxIdsWithSuffix(AdminTransactionEntry.MARKER_OUTCOME)) {
-            final var entries = AdminOperationHelper
-                    .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
-            if (entries.isEmpty()) {
-                continue;
-            }
-            final var resolvedAt = Long
-                    .parseLong(entries.getFirst().getPayload().get(RESOLVED_AT_FIELD).asJsonString().getValue());
-            if (resolvedAt < cutoff) {
-                deleteOutcomeMarker(dtxId);
+        final var expired = new ArrayList<String>();
+        for (final var markerId : OutcomeMarkers.resolvedBefore(System.currentTimeMillis() - retentionMs)) {
+            final var dtxId = OutcomeMarkers.dtxIdOf(markerId);
+            if (!isPrepared(dtxId) && !TxCommitLog.isLocallyCommitted(dtxId)) {
+                expired.add(markerId);
             }
         }
+        if (!expired.isEmpty()) {
+            AdminOperationHelper.deleteTransactionOps(expired);
+        }
+    }
+
+    static long resolvedAtOf(AdminTransactionEntry marker) {
+        final var payload = marker.getPayload();
+        return payload != null && payload.has(RESOLVED_AT_FIELD)
+                ? Long.parseLong(payload.get(RESOLVED_AT_FIELD).asJsonString().getValue())
+                : System.currentTimeMillis();
     }
 
     public static void recordCoordinatorCommit(String dtxId, String sessionId, List<String> participants)
@@ -192,7 +205,8 @@ public final class Tx2pcLog {
                 ? Long.parseLong(payload.get(PREPARED_AT_FIELD).asJsonString().getValue())
                 : 0L;
         return new ParticipantMarker(payload.get(COORDINATOR_ADDRESS_FIELD).asJsonString().getValue(),
-                readStringArray(payload, PARTICIPANTS_FIELD), readStringArray(payload, COLLECTIONS_FIELD), preparedAt);
+                readStringArray(payload, PARTICIPANTS_FIELD), readStringArray(payload, COLLECTIONS_FIELD), preparedAt,
+                payload.has(OP_IDS_FIELD) ? readStringArray(payload, OP_IDS_FIELD) : null);
     }
 
     public static List<String> readCoordinatorParticipants(String dtxId) throws Exception {
@@ -262,6 +276,6 @@ public final class Tx2pcLog {
     }
 
     public record ParticipantMarker(String coordinatorAddress, List<String> participants, List<String> collections,
-            long preparedAt) {
+            long preparedAt, List<String> opIds) {
     }
 }

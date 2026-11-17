@@ -2,11 +2,14 @@ package org.techhouse.config;
 
 import java.nio.file.FileSystems;
 import java.util.List;
+import java.util.Set;
 
 public final class Globals {
     private Globals() {
     }
     public static final String PK_FIELD = "_id";
+    public static final Set<String> RETRYABLE_ERROR_CODES = Set.of("503-2", "503-4", "503-5", "503-9", "503-10",
+            "503-16", "503-17", "503-18", "503-19", "503-20", "503-21", "503-22");
     public static final String TRIGGER_DEPTH_FIELD = "triggerDepth";
     public static final String INDEX_TYPE_NUMBER = "Number";
     public static final String INDEX_TYPE_STRING = "String";
@@ -20,10 +23,14 @@ public final class Globals {
     public static final int PAGE_VACUUM_DEAD_DIVISOR = 4;
     public static final long COMPACT_STAY_DEAD_FLOOR = 16 * 1024;
     public static final long FIELD_INDEX_LOG_MIN_BYTES = 64 * 1024;
+    public static final long INDEX_LOG_MEMO_MAX_BYTES = 16L * 1024 * 1024;
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String VACUUM_FILE_EXTENSION = ".vacuum";
     public static final String INTENT_LOG_EXTENSION = ".intents";
     public static final String WAL_EXTENSION = ".wal";
+    public static final String SNAPSHOT_FOLDER_NAME = ".snapshots";
+    public static final String SNAPSHOT_IMAGES_EXTENSION = ".images";
+    public static final int SNAPSHOT_MAX_PAGE_DOCUMENTS = 100_000;
     public static final String JSON_FILE_EXTENSION = ".json";
     public static final String INDEX_FILE_EXTENSION = ".idx";
     public static final String INDEX_LOG_SUFFIX = "log";
@@ -69,8 +76,11 @@ public final class Globals {
     public static final String LOG_FILE_EXTENSION = ".log";
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String FILE_PAGE_SEPARATOR = "-";
-    public static final String NEWLINE = System.lineSeparator();
+    public static final String NEWLINE = "\n";
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
+    public static final int PROTOCOL_VERSION = 1;
+    public static final int STORAGE_FORMAT_VERSION = 1;
+    public static final int UNSTAMPED_STORAGE_FORMAT_VERSION = 1;
     public static final String CUSTOM_JSON_REGEX = "^#[a-zA-Z0-9]{3,20}\\(.*\\)$";
     public static final double EARTH_RADIUS_METERS = 6371000.0;
     public static final int GEO_HASH_MAX_PRECISION = 9;
@@ -86,7 +96,7 @@ public final class Globals {
     public static final int KEY_TABLE_PIN_HITS = 8;
     public static final int SHAPE_TABLE_SLOTS = 1024;
     public static final int SHAPE_TABLE_MAX_PINNED = 256;
-    public static final int SHAPE_TABLE_MAX_KEYS = 32;
+    public static final int SHAPE_TABLE_MAX_KEYS = 64;
     public static final long MAX_REQUEST_SIZE_CEILING = 1_073_741_824L;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";
@@ -98,6 +108,7 @@ public final class Globals {
     public static final String TLS_PROTOCOL = "TLS";
     public static final int TLS_CLOSE_LINGER_SECONDS = 1;
     public static final String STANDALONE_NODE_ID = "local";
+    public static final String FORMAT_STAMP_FILE = "format.json";
     public static final String CLUSTER_FOLDER = "cluster";
     public static final String CLUSTER_NODE_ID_FILE = "node.id";
     public static final String CLUSTER_ADMIN_TOMBSTONES_FILE = "admin-tombstones.idx";
@@ -113,8 +124,41 @@ public final class Globals {
     public static final long PAGE_ROWS_WRITE_BACK_MS = 1000L;
     public static final long BACKGROUND_STEAL_AFTER_MS = 50L;
     public static final long TRANSACTION_OP_RECORD_BYTES = 4L * 1024 * 1024;
-    public static final int WAL_CHECKPOINT_PARALLELISM = 8;
+    public static final int WAL_CHECKPOINT_PARALLELISM = 32;
     public static final int WAL_IDLE_CHECKPOINT_MAX_LOGS = 16;
     public static final long WAL_IDLE_CHECKPOINT_SCAN_MS = 1000L;
+    public static final long WAL_CHECKPOINT_RETRY_BASE_MS = 1000L;
+    public static final long WAL_CHECKPOINT_RETRY_MAX_MS = 60_000L;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
+    public static final int INLINE_FRAME_MAX_BYTES = 16 * 1024;
+    public static final long RESPONSE_BUDGET_FLOOR_BYTES = 64L * 1024;
+    public static final long SCRIPT_HISTORY_COALESCE_MS = 50L;
+    public static final double AUTO_MAX_MEMORY_HEAP_FRACTION = 0.40;
+    public static final double MAX_MEMORY_HEAP_CEILING = 0.60;
+    public static final double AUTO_AGGREGATE_RESULT_HEAP_FRACTION = 0.25;
+    public static final double AUTO_AGGREGATE_TOTAL_HEAP_FRACTION = 0.25;
+    public static final double AUTO_TRANSACTION_TOTAL_HEAP_FRACTION = 0.25;
+    public static final int WRITE_STALL_MIN_PROGRESS_BYTES = 64 * 1024;
+    public static final int CLIENT_MAX_REPLY_DEPTH = 512;
+    public static final double TRANSIENT_LOAD_HEAP_FRACTION = 0.25;
+    public static final int SAME_TIER_EVICTION_RATIO = 4;
+    public static final int REFUSED_INDEX_FOLD_DIVISOR = 8;
+    public static final int RESIDENT_INDEX_FOLD_CEILING = 4;
+    public static final long IDLE_INDEX_FOLD_QUIET_MS = 1000L;
+    public static final int IDLE_INDEX_FOLDS_PER_PASS = 4;
+    public static final long BACKGROUND_LINGER_NANOS = 500_000L;
+    public static final int BACKGROUND_LINGER_EVENTS = 64;
+    public static final long BACKGROUND_LINGER_BUSY_WINDOW_NANOS = 2_000_000L;
+    public static final int WAL_SYNC_CHECKPOINT_FACTOR = 2;
+    public static final int WAL_PREALLOCATE_MIN_BYTES = 64 * 1024;
+    public static final int WAL_PREALLOCATE_MAX_BYTES = 1024 * 1024;
+    public static final List<Integer> LAZY_CANDIDATE_CHUNKS = List.of(256, 1024, 4096, 16384);
+    public static final int REPAIR_PASS_CHUNK = 4096;
+    public static final long WAL_BACKGROUND_CHECKPOINT_LOCK_WAIT_MS = 1000L;
+    public static final long DEFERRED_APPLY_LOCK_WAIT_MS = 1000L;
+    public static final long FENCE_REDRIVE_INITIAL_MS = 100L;
+    public static final long FENCE_REDRIVE_MAX_MS = 5000L;
+    public static final long FENCE_RECHECK_MS = 200L;
+    public static final long REFUSAL_MIN_SPACING_MS = 1000L;
+    public static final long TRANSIENT_SORT_WALK_MAX_INDEX_BYTES = 1024L * 1024L;
 }

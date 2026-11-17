@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.internal.EncodedJson;
@@ -149,7 +150,7 @@ public class OutboundQueueTest {
     @Test
     public void test_the_line_terminator_counts_toward_the_cap() throws Exception {
         stallOnALineInFlight();
-        final var terminator = System.lineSeparator().length();
+        final var terminator = Globals.NEWLINE.length();
 
         assertTrue(offer(line('a', 50 - terminator)));
         assertTrue(offer(line('b', 50 - terminator)), "two frames of exactly half the cap fit");
@@ -211,7 +212,7 @@ public class OutboundQueueTest {
     @Test
     public void aSegmentedFrameCountsEverySegmentAgainstTheCap() throws Exception {
         stallOnALineInFlight();
-        final var terminator = System.lineSeparator().length();
+        final var terminator = Globals.NEWLINE.length();
 
         assertTrue(queue.offer(segment(line('h', 10)), segment(line('b', 30 - terminator)), segment(line('t', 10))));
         assertFalse(queue.offer(segment(line('h', 10)), segment(line('b', 31)), segment(line('t', 10))),
@@ -241,7 +242,7 @@ public class OutboundQueueTest {
         final var sink = new ByteArrayOutputStream();
         final var writer = new BufferedWriter(new OutputStreamWriter(sink, StandardCharsets.UTF_8));
         writer.write(frame);
-        writer.newLine();
+        writer.write(Globals.NEWLINE);
         writer.flush();
         return sink.toByteArray();
     }

@@ -1,0 +1,8 @@
+{
+  "area": "schema",
+  "cases": [
+    {"name":"schema.save","request":{"type":"SAVE_SCHEMA","databaseName":"shop","collectionName":"orders","schema":{"type":"object","required":["status"],"properties":{"status":{"type":"string"}}}}},
+    {"name":"schema.get","request":{"type":"GET_SCHEMA","databaseName":"shop","collectionName":"orders"}},
+    {"name":"schema.delete","request":{"type":"DELETE_SCHEMA","databaseName":"shop","collectionName":"orders"}}
+  ]
+}

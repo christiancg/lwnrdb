@@ -87,9 +87,9 @@ final class PageAppender {
                         ? positions[index]
                         : RecordReplacer.positionAfter(moved, row.getValue(), positions[index]);
                 RecordReplacer.requireWithinPage(row, position,
-                        paths.collectionPage(dbName, collName, row.getPage()).length());
+                        PageLengths.lengthOf(paths.collectionPage(dbName, collName, row.getPage())));
                 plan.deleteRow(row.getValue());
-                plan.blank(row.getPage(), position, row.getLength());
+                plan.blank(row.getValue(), row.getPage(), position, row.getLength());
             }
             final var indexEntries = new ArrayList<IndexedDbEntry>(inserts.size());
             for (final var group : groups.entrySet()) {
@@ -133,10 +133,11 @@ final class PageAppender {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
-        final var lock = FileLocks.lockWrite(paths.collectionPage(dbName, collName, page));
+        final var file = paths.collectionPage(dbName, collName, page);
+        final var lock = FileLocks.lockWrite(file);
         try {
             vacuum.vacuumIfNeeded(dbName, collName, page, line.length, null, null);
-            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName).onPage(page, file);
             final var row = new PkIndexEntry(dbName, collName, entry.get_id(), plan.append(page, line), line.length,
                     page, entry.getVersion());
             plan.insertRow(row);

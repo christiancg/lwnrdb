@@ -4,13 +4,13 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.PreAuthSlots;
+import org.techhouse.conn.SocketReaderThreads;
 import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.log.Logger;
 
@@ -20,7 +20,7 @@ public class ClusterServer {
     private final int port;
     private final String bindAddress;
     private final SSLServerSocketFactory sslServerSocketFactory;
-    private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService pool = SocketReaderThreads.newPerTaskExecutor();
     private final AtomicInteger inHandshake = new AtomicInteger();
     private volatile ServerSocket serverSocket;
     private volatile boolean running;

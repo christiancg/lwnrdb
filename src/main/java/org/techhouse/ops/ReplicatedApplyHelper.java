@@ -1,10 +1,11 @@
 package org.techhouse.ops;
 
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Collection;
 import java.util.List;
 import org.techhouse.cache.Cache;
-import org.techhouse.cache.PkIndexList;
+import org.techhouse.cache.WriterPkRows;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.HybridClock;
@@ -113,6 +114,8 @@ public final class ReplicatedApplyHelper {
         final var acceptedDocuments = new ArrayList<JsonObject>();
         final var acceptedVersions = new ArrayList<Long>();
         final var tombstones = fs.tombstones().view(payload.getDbName(), payload.getCollName());
+        final var stored = storedRowsOf(payload.getDbName(), payload.getCollName(),
+                versionedIdsOf(documents, versions));
         for (var i = 0; i < documents.size(); i++) {
             final var document = documents.get(i);
             final var version = versionAt(versions, i);
@@ -122,7 +125,7 @@ public final class ReplicatedApplyHelper {
                 continue;
             }
             hybridClock.observe(version);
-            if (isSupersededLocally(payload.getDbName(), payload.getCollName(), document, version, tombstones)) {
+            if (isSupersededLocally(document, version, stored, tombstones)) {
                 continue;
             }
             acceptedDocuments.add(document);
@@ -152,25 +155,38 @@ public final class ReplicatedApplyHelper {
         return true;
     }
 
-    private static boolean isSupersededLocally(String dbName, String collName, JsonObject document, long version,
-            TombstoneView tombstones) throws java.io.IOException {
-        final var idElement = document.get(Globals.PK_FIELD);
-        if (!(idElement instanceof JsonString jsonString)) {
+    private static boolean isSupersededLocally(JsonObject document, long version, WriterPkRows stored,
+            TombstoneView tombstones) {
+        final var id = idOf(document);
+        if (id == null) {
             return false;
         }
-        final var id = jsonString.getValue();
-        final var stored = storedVersionOf(dbName, collName, id);
-        if (stored != null && stored > version) {
+        final var row = stored.row(id);
+        if (row != null && row.getVersion() > version) {
             return true;
         }
         final var tombstoned = tombstones.versionOf(id);
         return tombstoned != 0L && tombstoned >= version;
     }
 
-    private static Long storedVersionOf(String dbName, String collName, String id) throws java.io.IOException {
-        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        final var found = Collections.binarySearch(primaryKeyIndex, id);
-        return found >= 0 ? primaryKeyIndex.get(found).getVersion() : null;
+    private static String idOf(JsonObject document) {
+        return document.get(Globals.PK_FIELD) instanceof JsonString jsonString ? jsonString.getValue() : null;
+    }
+
+    private static List<String> versionedIdsOf(List<JsonObject> documents, List<String> versions) {
+        final var ids = new ArrayList<String>(documents.size());
+        for (var i = 0; i < documents.size(); i++) {
+            final var id = idOf(documents.get(i));
+            if (id != null && versionAt(versions, i) != null) {
+                ids.add(id);
+            }
+        }
+        return ids;
+    }
+
+    private static WriterPkRows storedRowsOf(String dbName, String collName, Collection<String> ids)
+            throws IOException {
+        return ids.isEmpty() ? WriterPkRows.of(List.of()) : cache.pkRowsForWriter(dbName, collName, ids);
     }
 
     private static Long versionAt(List<String> versions, int index) {
@@ -187,7 +203,7 @@ public final class ReplicatedApplyHelper {
         final var ids = payload.getIds();
         final var versions = payload.getVersions();
         final var tombstones = fs.tombstones().view(dbName, collName);
-        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        final var storedRows = storedRowsOf(dbName, collName, ids);
         final var missingIds = new ArrayList<String>();
         final var missingVersions = new ArrayList<Long>();
         final var deletable = new ArrayList<String>(ids.size());
@@ -201,7 +217,7 @@ public final class ReplicatedApplyHelper {
                     missingVersions.add(version);
                 }
             }
-            final var stored = PkIndexList.rowOf(primaryKeyIndex, id);
+            final var stored = storedRows.row(id);
             if (version == null || stored == null || stored.getVersion() <= version) {
                 deletable.add(id);
             }

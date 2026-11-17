@@ -1,0 +1,3 @@
+*
+!target/lwnrdb.jar
+!test_utils/lazyfs/lazyfs.toml

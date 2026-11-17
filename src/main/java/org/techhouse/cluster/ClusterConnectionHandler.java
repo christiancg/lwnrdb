@@ -115,7 +115,7 @@ public class ClusterConnectionHandler implements Runnable {
                 if (line.isBlank()) {
                     continue;
                 }
-                final var request = eJson.fromJson(line, ClusterMessage.class);
+                final var request = parseFrame(line);
                 if (request == null) {
                     continue;
                 }
@@ -130,6 +130,20 @@ public class ClusterConnectionHandler implements Runnable {
                 }
             }
         }
+    }
+
+    private ClusterMessage parseFrame(String line) {
+        ClusterMessage request;
+        try {
+            request = eJson.fromJson(line, ClusterMessage.class);
+        } catch (RuntimeException malformed) {
+            request = null;
+        }
+        if (request == null || request.getType() == null) {
+            ConnectionLog.warn(logger, "Skipped a malformed cluster frame from " + socket.getRemoteSocketAddress());
+            return null;
+        }
+        return request;
     }
 
     static String laneKeyOf(ClusterMessage request) {
@@ -175,7 +189,7 @@ public class ClusterConnectionHandler implements Runnable {
         writerLock.lock();
         try {
             writer.write(eJson.toJson(response));
-            writer.newLine();
+            writer.write(Globals.NEWLINE);
             writer.flush();
         } finally {
             writerLock.unlock();
@@ -227,7 +241,7 @@ public class ClusterConnectionHandler implements Runnable {
             case CANCEL_SCRIPT -> handleCancelScript(request);
             case LIST_TRIGGER_RUNS -> handleListTriggerRuns(request);
             case RESOLVE_TRIGGER_RUN -> handleResolveTriggerRun(request);
-            case ADMIN_SNAPSHOT -> handleAdminSnapshot();
+            case ADMIN_SNAPSHOT -> handleAdminSnapshot(request);
             case DIGEST -> handleDigest(request);
             case PULL -> handlePull(request);
             default -> {
@@ -279,9 +293,10 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    private ClusterMessage handleAdminSnapshot() {
+    private ClusterMessage handleAdminSnapshot(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.ADMIN_SNAPSHOT_ACK, "Failed to build admin snapshot",
-                response -> response.setAdminSnapshot(adminAntiEntropyService.buildSnapshot()));
+                response -> response
+                        .setAdminSnapshot(adminAntiEntropyService.buildSnapshot(request.getAdminSnapshot())));
     }
 
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {

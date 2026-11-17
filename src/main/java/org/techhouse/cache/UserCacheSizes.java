@@ -1,7 +1,9 @@
 package org.techhouse.cache;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import org.techhouse.config.Globals;
@@ -14,8 +16,9 @@ final class UserCacheSizes {
     private final Map<String, SizeCell> fieldIndexCells = new ConcurrentHashMap<>();
     private final Map<String, Drift> fieldIndexDrift = new ConcurrentHashMap<>();
     private final Map<String, RefusedPk> refusedPk = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Long>> refusedFieldIndexes = new ConcurrentHashMap<>();
 
-    record RefusedPk(long bytesPerEntry, long rows) {
+    record RefusedPk(long bytesPerEntry, long rows, boolean displaced) {
         long bytes() {
             return bytesPerEntry * rows;
         }
@@ -93,11 +96,13 @@ final class UserCacheSizes {
 
     void forgetCollection(String collId) {
         refusedPk.remove(collId);
+        refusedFieldIndexes.remove(collId);
         forgetByPrefix(collId + Globals.COLL_IDENTIFIER_SEPARATOR);
     }
 
     void forgetByPrefix(String prefix) {
         refusedPk.keySet().removeIf(key -> key.startsWith(prefix));
+        refusedFieldIndexes.keySet().removeIf(key -> key.startsWith(prefix));
         forgetWhere(key -> key.startsWith(prefix));
     }
 
@@ -117,7 +122,11 @@ final class UserCacheSizes {
     }
 
     void refusePk(String collId, long bytesPerEntry, long rows) {
-        refusedPk.put(collId, new RefusedPk(bytesPerEntry, rows));
+        refusedPk.put(collId, new RefusedPk(bytesPerEntry, rows, false));
+    }
+
+    void displacePk(String collId, long bytesPerEntry, long rows) {
+        refusedPk.put(collId, new RefusedPk(bytesPerEntry, rows, true));
     }
 
     RefusedPk refusedPk(String collId) {
@@ -126,6 +135,41 @@ final class UserCacheSizes {
 
     void clearRefusedPk(String collId) {
         refusedPk.remove(collId);
+    }
+
+    void refuseFieldIndex(String collId, String indexKey, long bytes) {
+        refusedFieldIndexes.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>()).put(indexKey, bytes);
+    }
+
+    Long refusedFieldIndexBytes(String collId, String indexKey) {
+        final var refused = refusedFieldIndexes.get(collId);
+        return refused == null ? null : refused.get(indexKey);
+    }
+
+    Set<String> fieldsWithRefusedTypes(String collId) {
+        final var refused = refusedFieldIndexes.get(collId);
+        if (refused == null || refused.isEmpty()) {
+            return Set.of();
+        }
+        final var fields = new HashSet<String>();
+        for (final var indexKey : refused.keySet()) {
+            fields.add(CacheableResource.indexedFieldOf(indexKey));
+        }
+        return fields;
+    }
+
+    void clearRefusedFieldIndex(String collId, String indexKey) {
+        final var refused = refusedFieldIndexes.get(collId);
+        if (refused != null) {
+            refused.remove(indexKey);
+        }
+    }
+
+    void clearRefusedField(String collId, String fieldName) {
+        final var refused = refusedFieldIndexes.get(collId);
+        if (refused != null) {
+            refused.keySet().removeIf(indexKey -> CacheableResource.indexedFieldOf(indexKey).equals(fieldName));
+        }
     }
 
     private static String fieldIndexKey(String collId, String indexKey) {

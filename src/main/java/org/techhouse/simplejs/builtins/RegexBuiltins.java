@@ -3,7 +3,7 @@ package org.techhouse.simplejs.builtins;
 import static org.techhouse.simplejs.builtins.regex.RegexEscape.escape;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.EXEC;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.builtinExec;
-import static org.techhouse.simplejs.builtins.regex.RegexExec.regExpExec;
+import static org.techhouse.simplejs.builtins.regex.RegexExec.regExpTest;
 import static org.techhouse.simplejs.internal.regex.RegexFlags.ACCESSOR_NAMES;
 import static org.techhouse.simplejs.internal.regex.RegexFlags.FLAG_ACCESSOR_NAMES;
 import static org.techhouse.simplejs.internal.regex.RegexFlags.NON_FLAGS_ACCESSOR_NAMES;
@@ -16,7 +16,6 @@ import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
-import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsString;
@@ -145,8 +144,8 @@ public final class RegexBuiltins {
 
     public static JsValue getMethod(JsRegExp receiver, String name, InterpreterOps ops) {
         return switch (name) {
-            case "test" -> new JsNativeFunction("test", (thisArg, args) -> JsBoolean
-                    .of(!(regExpExec(receiverOf(thisArg, receiver), str(args, ops), ops) instanceof JsNull)));
+            case "test" -> new JsNativeFunction("test",
+                    (thisArg, args) -> JsBoolean.of(regExpTest(receiverOf(thisArg, receiver), str(args, ops), ops)));
             case EXEC -> new JsNativeFunction(EXEC,
                     (thisArg, args) -> builtinExec(receiverOf(thisArg, receiver), receiver, str(args, ops), ops));
             case "toString" -> new JsNativeFunction("toString",

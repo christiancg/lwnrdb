@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import org.junit.jupiter.api.AfterEach;
@@ -16,6 +17,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
@@ -138,6 +140,7 @@ public class LeftoverFolderAdoptionTest {
 
     @Test
     public void test_create_collection_refuses_a_leftover_it_cannot_move() throws Exception {
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has permission bits that deny its owner");
         leaveAPopulatedUnregisteredCollection();
         final var dbDir = testDatabaseFolder();
         assertTrue(dbDir.setWritable(false));
@@ -172,6 +175,7 @@ public class LeftoverFolderAdoptionTest {
 
     @Test
     public void test_create_database_refuses_a_leftover_it_cannot_move() throws Exception {
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has permission bits that deny its owner");
         assertTrue(fs.createDatabaseFolder(DATABASE));
         fs.metadataFiles().writeProcedure(DATABASE, "oldproc", "{\"name\":\"oldproc\"}");
         final var root = new File(TestGlobals.PATH);

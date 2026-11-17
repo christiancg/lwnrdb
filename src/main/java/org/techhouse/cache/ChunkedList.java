@@ -3,6 +3,7 @@ package org.techhouse.cache;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
@@ -202,6 +203,17 @@ public class ChunkedList<E> extends AbstractList<E> implements RandomAccess, Sor
         modCount++;
         restart();
         resized();
+    }
+
+    public int binarySearch(E key, Comparator<? super E> order) {
+        final var point = partitionPoint(element -> order.compare(element, key) < 0);
+        return point < size && order.compare(get(point), key) == 0 ? point : -point - 1;
+    }
+
+    public static <T> int binarySearch(List<T> sorted, T key, Comparator<? super T> order) {
+        return sorted instanceof ChunkedList<T> chunked
+                ? chunked.binarySearch(key, order)
+                : Collections.binarySearch(sorted, key, order);
     }
 
     @Override

@@ -40,6 +40,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TriggerRunIndex;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.TwoPhaseParticipant;
@@ -225,6 +226,9 @@ public class TriggerStartupReplayTest {
     public void test_startup_run_ids_falls_back_to_every_pending_run_when_records_cannot_be_read() throws Exception {
         final var txId = crashAfterStagingCommittedSlice("unreadable", true);
         final var everyPending = TriggerRunLog.pendingRunIds();
+        for (final var runId : everyPending) {
+            TriggerRunLog.recordIdsFor(runId).forEach(TriggerRunIndex::forget);
+        }
 
         try (var ignored = mockStatic(AdminOperationHelper.class, CALLS_REAL_METHODS)) {
             ignored.when(() -> AdminOperationHelper.readTriggerRuns(anyList())).thenThrow(new IOException("torn"));

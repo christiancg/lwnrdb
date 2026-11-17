@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -24,7 +25,7 @@ import org.techhouse.utils.JsonUtils;
 
 public class JsonObjectShapeTest {
     private static final int WIDE = 20;
-    private static final int PAST_THE_SHAPE_BOUND = 40;
+    private static final int PAST_THE_SHAPE_BOUND = Globals.SHAPE_TABLE_MAX_KEYS + 8;
 
     private static JsonObject parse(String json) {
         parseOnce(json);
@@ -210,6 +211,7 @@ public class JsonObjectShapeTest {
 
         assertNull(object.shape());
         assertEquals(PAST_THE_SHAPE_BOUND, object.size());
-        assertEquals(39, object.get("many39").asJsonNumber().getValue().intValue());
+        final var last = PAST_THE_SHAPE_BOUND - 1;
+        assertEquals(last, object.get("many" + last).asJsonNumber().getValue().intValue());
     }
 }

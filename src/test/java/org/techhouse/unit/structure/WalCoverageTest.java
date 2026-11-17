@@ -21,6 +21,7 @@ public class WalCoverageTest {
             "src/main/java/org/techhouse/fs/WalRedo.java", "src/main/java/org/techhouse/fs/WriteAheadLog.java",
             "src/main/java/org/techhouse/fs/PageVacuum.java", "src/main/java/org/techhouse/fs/PkIndexStore.java",
             "src/main/java/org/techhouse/fs/TornPageTail.java",
+            "src/main/java/org/techhouse/fs/FailedForceRebuild.java",
             "src/main/java/org/techhouse/fs/OrphanedPageRecords.java");
 
     static Set<String> pageAndPkWriters(List<JavaSourceFile> files) {

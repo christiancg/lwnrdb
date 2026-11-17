@@ -64,6 +64,20 @@ public class FaultInjectorTest {
     }
 
     @Test
+    public void test_a_collection_subject_is_built_only_while_enabled_and_matches_its_spelled_out_form()
+            throws Exception {
+        injector.arm(FaultPoint.WAL_APPENDED, FaultAction.HALT, SUBJECT);
+        injector.at(FaultPoint.WAL_APPENDED, "db", "other");
+        assertTrue(halts.isEmpty());
+        TestUtils.setPrivateField(injector, "enabled", false);
+        injector.at(FaultPoint.WAL_APPENDED, "db", "coll");
+        assertTrue(halts.isEmpty(), "a disabled injector builds no subject and fires nothing");
+        TestUtils.setPrivateField(injector, "enabled", true);
+        injector.at(FaultPoint.WAL_APPENDED, "db", "coll");
+        assertEquals(List.of(137), halts);
+    }
+
+    @Test
     public void test_an_unarmed_point_passes_through() {
         injector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, SUBJECT);
         assertFalse(injector.dropsAt(FaultPoint.PEER_REPLY, "COMMIT_TX"));
@@ -129,6 +143,24 @@ public class FaultInjectorTest {
         assertFalse(injector.dropsAt(FaultPoint.PEER_REPLY, "PREPARE_TX"));
         assertTrue(injector.dropsAt(FaultPoint.PEER_REPLY, "COMMIT_TX"));
         assertFalse(injector.dropsAt(FaultPoint.PEER_REPLY, "COMMIT_TX"));
+    }
+
+    @Test
+    public void test_fails_at_fires_once_and_only_for_its_subject() {
+        injector.arm(FaultPoint.FILE_FORCED, FaultAction.FAIL, "orders.wal");
+        assertFalse(injector.failsAt(FaultPoint.FILE_FORCED, "orders-pk.idx"));
+        assertTrue(injector.failsAt(FaultPoint.FILE_FORCED, "orders.wal"));
+        assertFalse(injector.failsAt(FaultPoint.FILE_FORCED, "orders.wal"));
+    }
+
+    @Test
+    public void test_fails_at_answers_false_when_disabled_or_for_another_action() throws Exception {
+        injector.arm(FaultPoint.FILE_FORCED, FaultAction.HALT, null);
+        assertFalse(injector.failsAt(FaultPoint.FILE_FORCED, "orders.wal"));
+        assertEquals(List.of(137), halts);
+        injector.arm(FaultPoint.FILE_FORCED, FaultAction.FAIL, null);
+        TestUtils.setPrivateField(injector, "enabled", false);
+        assertFalse(injector.failsAt(FaultPoint.FILE_FORCED, "orders.wal"));
     }
 
     @Test
@@ -243,5 +275,7 @@ public class FaultInjectorTest {
         assertNull(FaultInjector.parse(FaultAction.class, null));
         assertTrue(FaultPoint.PEER_REPLY.isDroppable());
         assertFalse(FaultPoint.WRITE_OWNERSHIP_RECHECKED.isDroppable());
+        assertTrue(FaultPoint.FILE_FORCED.isFailable());
+        assertFalse(FaultPoint.PEER_REPLY.isFailable());
     }
 }

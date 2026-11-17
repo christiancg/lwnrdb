@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -21,11 +22,14 @@ import org.techhouse.ops.admin.GrantRewrite;
 import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.auth.AuthFailureThrottle;
 import org.techhouse.ops.auth.PasswordCheckGate;
+import org.techhouse.ops.auth.VerifiedPasswords;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
+import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.OperationResponse;
 
 public class UserOperationHelper {
@@ -33,6 +37,7 @@ public class UserOperationHelper {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final AuthFailureThrottle authFailureThrottle = IocContainer.get(AuthFailureThrottle.class);
     private static final PasswordCheckGate passwordCheckGate = IocContainer.get(PasswordCheckGate.class);
+    private static final VerifiedPasswords verifiedPasswords = IocContainer.get(VerifiedPasswords.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     public static Map<String, List<String>> ownedDatabasesByUser(Collection<AdminDbEntry> databases) {
@@ -53,13 +58,14 @@ public class UserOperationHelper {
             final var key = AuthFailureThrottle.keyOf(address, username);
             pauseFor(key, AuthFailureThrottle.addressKeyOf(address));
             final var user = cache.getAdminUserEntry(username);
-            final boolean verified = passwordCheckGate.run(() -> user == null
-                    ? PasswordHasher.dummyVerify(password)
-                    : PasswordHasher.verify(password, user.getPasswordHash()));
-            if (!verified) {
+            if (user == null) {
+                passwordCheckGate.run(() -> PasswordHasher.dummyVerify(password));
                 return failedAttempt(key, address, clientId);
             }
             final var verifiedHash = user.getPasswordHash();
+            if (!passwordMatches(username, verifiedHash, password)) {
+                return failedAttempt(key, address, clientId);
+            }
             final var bound = AdminOperationHelper.withUsersLock(() -> {
                 final var current = cache.getAdminUserEntry(username);
                 if (current == null || !verifiedHash.equals(current.getPasswordHash())) {
@@ -74,6 +80,18 @@ public class UserOperationHelper {
             authFailureThrottle.recordSuccess(key);
             return bound;
         });
+    }
+
+    private static boolean passwordMatches(String username, String storedHash, String password)
+            throws InterruptedException {
+        if (verifiedPasswords.matches(username, storedHash, password)) {
+            return true;
+        }
+        final boolean verified = passwordCheckGate.run(() -> PasswordHasher.verify(password, storedHash));
+        if (verified) {
+            verifiedPasswords.remember(username, storedHash, password);
+        }
+        return verified;
     }
 
     private static void pauseFor(String key, String addressKey) throws InterruptedException {
@@ -129,6 +147,22 @@ public class UserOperationHelper {
                     GrantPruner.forDeletedUser(username, new GrantRewrite.Restamp(restamped));
                     return OperationResponse.ok(OperationType.DELETE_USER, "User deleted successfully");
                 }));
+    }
+
+    public static OperationResponse processListUsers(ListUsersRequest request) {
+        final var lockSet = List
+                .of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME));
+        return OperationLocks.withReadLocks(request.isDirtyRead(), lockSet, OperationType.LIST_USERS,
+                ErrorCode.ERROR_LISTING_USERS, () -> {
+                    final var ownedByUser = ownedDatabasesByUser(cache.getAllAdminDbEntries());
+                    final var userStream = cache.getAllAdminUserEntries().stream()
+                            .map(user -> user.toResponseJson(ownedByUser.getOrDefault(user.get_id(), List.of())));
+                    final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
+                            userStream);
+                    return results.isEmpty()
+                            ? new OperationResponse(OperationType.LIST_USERS, ErrorCode.NO_USERS_FOUND)
+                            : new ListUsersResponse("Ok", results);
+                });
     }
 
     public static OperationResponse processSetPassword(SetPasswordRequest request, UUID clientId) {

@@ -23,6 +23,7 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -58,6 +59,7 @@ public class DirtyMarkerDurabilityTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_save_forces_no_marker() {
         assertEquals(OperationStatus.OK, saveLogged());
 
@@ -67,6 +69,7 @@ public class DirtyMarkerDurabilityTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_save_succeeds_when_the_marker_cannot_be_forced() {
         recorder.failingFor(DIRTY_MARKER);
 
@@ -88,6 +91,7 @@ public class DirtyMarkerDurabilityTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_recovered_marks_still_write_the_marker() {
         pendingIndexWrites.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("adopted"));
 
@@ -104,14 +108,15 @@ public class DirtyMarkerDurabilityTest {
         final var generation = pendingIndexWrites.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("adopted"));
         IocContainer.get(FileSystem.class).appendIndexLog(TestGlobals.DB, TestGlobals.COLL, "name", "String",
                 List.of(new IndexLogChange(FieldIndexEntry.fileKeyOf("x"), List.of("adopted"), List.of())),
-                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "x",
-                        new HashSet<>(Set.of("adopted")))));
+                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "x", new HashSet<>(Set.of("adopted")))),
+                false);
         assertTrue(markerFile().exists());
         recorder.clear();
         return generation;
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_clearing_the_marker_forces_the_unforced_index_logs_first() throws Exception {
         final var generation = recoverWithAnUnforcedIndexLog();
 
@@ -123,6 +128,7 @@ public class DirtyMarkerDurabilityTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_marker_whose_index_logs_cannot_be_forced_is_kept() throws Exception {
         final var generation = recoverWithAnUnforcedIndexLog();
         recorder.failingFor(".idxlog");

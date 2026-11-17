@@ -1,5 +1,6 @@
 package org.techhouse.unit.conn;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -15,7 +16,9 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.OutboundQueue;
+import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.test.TestGlobals;
@@ -25,6 +28,8 @@ public class MessageProcessorOutboundTest {
     private static final String ADMIN = "outbound_admin";
     private static final Pattern LISTEN_ID = Pattern.compile("\"listenId\":\"([0-9a-f-]{36})\"");
     private static final int PIPELINED_REQUESTS = 60;
+    private static final String LARGE_AGGREGATE = "{\"type\":\"AGGREGATE\",\"databaseName\":\"" + TestGlobals.DB
+            + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"aggregationSteps\":[]}";
     private final Configuration config = Configuration.getInstance();
     private ScriptedConnection connection;
 
@@ -40,6 +45,9 @@ public class MessageProcessorOutboundTest {
         assertTrue(connection
                 .exchange("{\"type\":\"AUTHENTICATE\",\"username\":\"" + ADMIN + "\",\"password\":\"password123\"}")
                 .contains("\"OK\""));
+        assertTrue(connection.exchange("{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"object\":{\"_id\":\"bulky\",\"blob\":\""
+                + "b".repeat(Globals.INLINE_FRAME_MAX_BYTES) + "\"}}").contains("\"OK\""));
     }
 
     @AfterEach
@@ -50,6 +58,8 @@ public class MessageProcessorOutboundTest {
                 ConfigKey.TRANSACTION_IDLE_TIMEOUT_MS.defaultValue());
         TestUtils.setPrivateField(config, "clientOutboundQueueMaxBytes",
                 ConfigKey.CLIENT_OUTBOUND_QUEUE_MAX_BYTES.defaultValue());
+        TestUtils.setPrivateField(config, "clientWriteStallTimeoutMs",
+                ConfigKey.CLIENT_WRITE_STALL_TIMEOUT_MS.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -94,10 +104,10 @@ public class MessageProcessorOutboundTest {
 
     private void stopReadingAndPipelineRequests() throws InterruptedException {
         connection.stallResponses();
-        connection.send("{\"type\":\"LIST_DATABASES\"}");
+        connection.send(LARGE_AGGREGATE);
         assertTrue(connection.awaitBlockedWriter());
         for (var i = 0; i < PIPELINED_REQUESTS; i++) {
-            connection.send("{\"type\":\"LIST_DATABASES\"}");
+            connection.send(LARGE_AGGREGATE);
         }
     }
 
@@ -106,15 +116,49 @@ public class MessageProcessorOutboundTest {
     }
 
     @Test
-    public void test_an_idle_transaction_is_reaped_while_its_responses_are_unread() throws Exception {
+    public void test_an_idle_transaction_is_reaped_while_a_large_response_is_unread() throws Exception {
+        openTransactionWithOneWrite();
+        connection.stallResponses();
+        connection.send(LARGE_AGGREGATE);
+        assertTrue(connection.awaitBlockedWriter());
+
+        assertTrue(eventually(MessageProcessorOutboundTest::collectionIsWritable),
+                "a drainer writes the large response, so the connection thread reaps the transaction");
+        assertTrue(outbound().isOpen(), "a single unread response is no overflow");
+    }
+
+    @Test
+    public void test_a_pipelining_client_keeps_the_connection_thread_free_to_reap() throws Exception {
+        openTransactionWithOneWrite();
+        connection.stallResponses();
+        connection.send("{\"type\":\"LIST_DATABASES\"}\n{\"type\":\"LIST_DATABASES\"}");
+        assertTrue(connection.awaitBlockedWriter());
+
+        assertTrue(eventually(MessageProcessorOutboundTest::collectionIsWritable),
+                "a burst of requests marks the connection as pipelining, so a drainer writes its small responses");
+        assertTrue(outbound().isOpen());
+        connection.resumeResponses();
+        assertTrue(connection.response().contains("LIST_DATABASES"));
+        assertTrue(connection.response().contains("LIST_DATABASES"));
+    }
+
+    @Test
+    public void test_a_small_unread_response_holds_its_transaction_until_the_stall_timeout_closes_the_connection()
+            throws Exception {
+        TestUtils.setPrivateField(config, "clientWriteStallTimeoutMs", 1000L);
         openTransactionWithOneWrite();
         connection.stallResponses();
         connection.send("{\"type\":\"LIST_DATABASES\"}");
         assertTrue(connection.awaitBlockedWriter());
 
-        assertTrue(eventually(MessageProcessorOutboundTest::collectionIsWritable),
-                "the connection thread reaps the transaction instead of blocking on the unread response");
-        assertTrue(outbound().isOpen(), "a single unread response is no overflow");
+        Thread.sleep(600);
+        assertFalse(collectionIsWritable(), "the connection thread itself is writing the small response");
+        final var watchdog = IocContainer.get(WriteStallWatchdog.class);
+        assertEquals(0, watchdog.scan(System.nanoTime()));
+        assertEquals(1, watchdog.scan(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1500)));
+
+        assertTrue(connection.awaitClosed(5000), "the stalled write failed once the watchdog closed the socket");
+        assertTrue(collectionIsWritable(), "the disconnect rolled the transaction back on its own thread");
     }
 
     @Test

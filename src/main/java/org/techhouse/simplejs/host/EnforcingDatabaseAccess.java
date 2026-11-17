@@ -36,12 +36,14 @@ import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.ops.resp.SaveResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
 import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.Intrinsics;
@@ -118,7 +120,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     @Override
     public List<JsonObject> aggregate(String db, String coll, JsonArray pipeline) {
         final var rawJson = aggregateMessage(db, coll, pipeline);
-        final var response = dispatch(parsedAggregate(rawJson), rawJson);
+        final var response = dispatch(parsedRequest(rawJson), rawJson);
         if (response instanceof AggregateResponse aggregateResponse) {
             return aggregateResponse.getResults();
         }
@@ -128,7 +130,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         throw jsError(response.getMessage());
     }
 
-    private OperationRequest parsedAggregate(String rawJson) {
+    private OperationRequest parsedRequest(String rawJson) {
         try {
             return RequestParser.parseRequest(rawJson);
         } catch (InvalidCommandException unparseable) {
@@ -169,8 +171,18 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     @Override
     public JsonObject save(String db, String coll, JsonObject document) {
+        return saveDocument(db, coll, document, false);
+    }
+
+    @Override
+    public JsonObject insert(String db, String coll, JsonObject document) {
+        return saveDocument(db, coll, document, true);
+    }
+
+    private JsonObject saveDocument(String db, String coll, JsonObject document, boolean failOnUpdate) {
         final var request = new SaveRequest(db, coll);
         request.setObject(document);
+        request.setFailOnUpdate(failOnUpdate);
         if (document.get(Globals.PK_FIELD) instanceof JsonString objectId) {
             request.set_id(objectId.getValue());
         }
@@ -200,6 +212,37 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response.getStatus() != OperationStatus.OK && !isNotFound(response)) {
             throw jsError(response.getMessage());
         }
+    }
+
+    @Override
+    public long deleteWhere(String db, String coll, JsonObject condition) {
+        final var message = new JsonObject();
+        message.add("type", new JsonString("DELETE"));
+        message.add("databaseName", new JsonString(db));
+        message.add("collectionName", new JsonString(coll));
+        message.add("condition", condition);
+        final var rawJson = eJson.toJson(message);
+        final var response = dispatch(parsedRequest(rawJson), rawJson);
+        if (response instanceof DeleteManyResponse deleteManyResponse) {
+            return deleteManyResponse.getDeletedCount();
+        }
+        throw jsError(response.getMessage());
+    }
+
+    @Override
+    public long updateWhere(String db, String coll, JsonObject condition, JsonObject patch) {
+        final var message = new JsonObject();
+        message.add("type", new JsonString("SAVE"));
+        message.add("databaseName", new JsonString(db));
+        message.add("collectionName", new JsonString(coll));
+        message.add("condition", condition);
+        message.add("object", patch);
+        final var rawJson = eJson.toJson(message);
+        final var response = dispatch(parsedRequest(rawJson), rawJson);
+        if (response instanceof SaveWhereResponse saveWhereResponse) {
+            return saveWhereResponse.getUpdatedCount();
+        }
+        throw jsError(response.getMessage());
     }
 
     @Override

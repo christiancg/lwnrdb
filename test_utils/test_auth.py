@@ -120,6 +120,11 @@ def test_unauthenticated():
           send_unauthenticated({"type": "CLOSE_CONNECTION"}),
           "OK")
 
+    anonymous = send_unauthenticated({"type": "SERVER_INFO"})
+    check_status("SERVER_INFO is public (must return OK)", anonymous, "OK")
+    check("SERVER_INFO before AUTHENTICATE reveals only the state",
+          anonymous.get("server") == {"state": "READY"}, str(anonymous))
+
 
 def test_bad_credentials(c):
     section("Authentication with wrong credentials — must return ERROR")
@@ -131,6 +136,21 @@ def test_bad_credentials(c):
     check_status("Unknown user",
           c.authenticate("nobody", "whatever123"),
           "ERROR")
+
+
+def test_server_info_tiers():
+    section("SERVER_INFO adds the build once authenticated and the node only for an admin")
+
+    with Conn() as session:
+        check_status("AUTHENTICATE as no_perms", session.authenticate("no_perms", "no_perms1234"), "OK")
+        server = session.send({"type": "SERVER_INFO"}).get("server", {})
+    check("a user without grants sees the build", {"state", "version", "protocolVersion", "storageFormatVersion",
+                                                   "startedAtMs", "uptimeMs"} == set(server), str(server))
+
+    with Conn() as session:
+        check_status("AUTHENTICATE as admin", session.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+        server = session.send({"type": "SERVER_INFO"}).get("server", {})
+    check("the admin also sees the node", "node" in server and "version" in server, str(server))
 
 
 def test_list_databases_requires_authentication():
@@ -336,6 +356,60 @@ def test_set_password_deauthenticates_other_sessions(c):
             check_code("A must authenticate again too", a.send(list_dbs), "UNAUTHENTICATED", "401-1")
     check_status("admin keeps its own session", c.send(list_dbs), "OK")
     delete_user(c, "pw_sess_user")
+
+
+VERIFIER_USER = "verifier_user"
+VERIFIER_PASSWORD = "verifier_pass1"
+VERIFIER_NEW_PASSWORD = "verifier_pass2"
+THROTTLE_DELAY_FLOOR_S = 0.15
+
+
+def authenticate_fresh(username, password):
+    with Conn() as session:
+        started = time.monotonic()
+        response = session.authenticate(username, password)
+        elapsed = time.monotonic() - started
+    return response, elapsed
+
+
+def test_repeated_authentication_and_the_verifier_cache(c):
+    section("A repeated AUTHENTICATE succeeds, and every change to the user stops the old password")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, VERIFIER_USER)
+    check_status(f"CREATE_USER {VERIFIER_USER!r}", create_user(c, VERIFIER_USER, VERIFIER_PASSWORD), "OK")
+    check_status("first AUTHENTICATE", authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)[0], "OK")
+    check_status("second AUTHENTICATE with the same password",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)[0], "OK")
+
+    check_code("a wrong password after a cached success fails",
+               authenticate_fresh(VERIFIER_USER, "verifier_wrong")[0], "ERROR", "401-3")
+    response, elapsed = authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)
+    check_status("the right password still authenticates afterwards", response, "OK")
+    check("the failure counted toward the throttle (the next attempt paid its delay)",
+          elapsed >= THROTTLE_DELAY_FLOOR_S, f"took {elapsed:.3f}s")
+
+    check_status("admin changes the password", set_password(c, VERIFIER_USER, VERIFIER_NEW_PASSWORD), "OK")
+    check_code("the old password fails after SET_PASSWORD",
+               authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)[0], "ERROR", "401-3")
+    check_status("the new password authenticates",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "OK")
+    check_status("the new password authenticates again",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "OK")
+
+    check_status(f"DELETE_USER {VERIFIER_USER!r}", delete_user(c, VERIFIER_USER), "OK")
+    check_code("a deleted user cannot log in with its last password",
+               authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "ERROR", "401-3")
+
+    check_status(f"re-CREATE_USER {VERIFIER_USER!r} with the same password",
+                 create_user(c, VERIFIER_USER, VERIFIER_NEW_PASSWORD), "OK")
+    check_status("the re-created user authenticates",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "OK")
+    check_status("the re-created user authenticates again",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "OK")
+    check_code("the original password still fails for the re-created user",
+               authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)[0], "ERROR", "401-3")
+    delete_user(c, VERIFIER_USER)
 
 
 def test_unknown_type_with_newline_is_refused_cleanly():
@@ -1120,6 +1194,7 @@ def main():
     with Conn() as c:
         test_bad_credentials(c)
 
+    test_server_info_tiers()
     test_list_databases_requires_authentication()
     test_unknown_type_with_newline_is_refused_cleanly()
 
@@ -1136,6 +1211,9 @@ def main():
 
     with Conn() as c:
         test_set_password_deauthenticates_other_sessions(c)
+
+    with Conn() as c:
+        test_repeated_authentication_and_the_verifier_cache(c)
 
     with Conn() as c:
         test_no_db_permission(c)

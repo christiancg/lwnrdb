@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -71,6 +72,10 @@ public final class TriggerRunLog {
         return write(descriptor, runId, null, txId, IMMEDIATE);
     }
 
+    static String recordDeterministic(TriggerRunDescriptor descriptor, String txId, String runId, EntrySink sink) {
+        return write(descriptor, runId, null, txId, sink);
+    }
+
     public static String deterministicRunId(String txId, String dbName, String collName, String triggerName,
             EventType eventType, String idOrNull) {
         final var key = String.join(String.valueOf(Globals.COLL_IDENTIFIER_SEPARATOR), txId, dbName, collName,
@@ -112,6 +117,55 @@ public final class TriggerRunLog {
         } catch (Exception e) {
             logger.error("Failed to discard the trigger run '" + runId + "'; it may replay at the next startup", e);
         }
+    }
+
+    public static void discardAll(Collection<String> runIds) {
+        if (runIds.isEmpty() || !isEnabled()) {
+            return;
+        }
+        try {
+            final var recordIds = recordIdsForAll(runIds);
+            if (!recordIds.isEmpty()) {
+                AdminOperationHelper.deleteTriggerRuns(recordIds);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to discard " + runIds.size() + " trigger run(s); they may replay at the next startup",
+                    e);
+        }
+    }
+
+    static boolean rewriteRun(String runId, List<AdminTriggerRunEntry> chunks) {
+        discard(runId);
+        var written = 0;
+        try {
+            for (final var chunk : chunks) {
+                AdminOperationHelper.saveTriggerRun(chunk);
+                written++;
+            }
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            logger.warning("Failed to record the pending trigger run '" + runId + "': " + e.getMessage());
+        }
+        discardPartialRecord(runId, written);
+        return false;
+    }
+
+    static Map<String, List<AdminTriggerRunEntry>> chunksByRun(List<AdminTriggerRunEntry> entries) {
+        final var runs = new LinkedHashMap<String, List<AdminTriggerRunEntry>>();
+        for (final var entry : entries) {
+            runs.computeIfAbsent(entry.getRunId(), _ -> new ArrayList<>()).add(entry);
+        }
+        return runs;
+    }
+
+    public static List<String> recordIdsForAll(Collection<String> runIds) {
+        final var recordIds = new ArrayList<String>();
+        for (final var runId : runIds) {
+            recordIds.addAll(recordIdsFor(runId));
+        }
+        return recordIds;
     }
 
     private static String write(TriggerRunDescriptor descriptor, String runId, Map<String, Long> priorVersions,
@@ -205,14 +259,19 @@ public final class TriggerRunLog {
         if (runId == null || !isEnabled()) {
             return;
         }
+        String dbName = null;
         try {
             for (final var entry : AdminOperationHelper.readTriggerRuns(recordIdsFor(runId))) {
                 entry.markAttempt(status, attempts, error, nextAttemptAt);
                 AdminOperationHelper.saveTriggerRun(entry);
+                dbName = entry.getDbName();
             }
         } catch (Exception e) {
             logger.warning(
                     "Failed to record attempt " + attempts + " of trigger run '" + runId + "': " + e.getMessage());
+        }
+        if (status == TriggerRunStatus.DEAD) {
+            TriggerDeadLetterCap.afterDeadLetter(dbName);
         }
     }
 
@@ -230,9 +289,9 @@ public final class TriggerRunLog {
         final var deadCutoff = now - deadLetterRetentionMs;
         final var ownNodeIds = ownNodeIds();
         final var stale = new ArrayList<String>();
-        for (final var entry : pending()) {
-            if (isStranded(entry, ownNodeIds, cutoff, deadCutoff)) {
-                stale.add(entry.get_id());
+        for (final var run : TriggerRunIndex.current()) {
+            if (isStranded(run, ownNodeIds, cutoff, deadCutoff)) {
+                stale.add(run.recordId());
             }
         }
         if (stale.isEmpty()) {
@@ -245,9 +304,9 @@ public final class TriggerRunLog {
     public static void discardAllFor(String dbName, String collName) {
         try {
             final var dropped = new ArrayList<String>();
-            for (final var entry : pending()) {
-                if (dbName.equals(entry.getDbName()) && (collName == null || collName.equals(entry.getCollName()))) {
-                    dropped.add(entry.get_id());
+            for (final var run : TriggerRunIndex.current()) {
+                if (dbName.equals(run.dbName()) && (collName == null || collName.equals(run.collName()))) {
+                    dropped.add(run.recordId());
                 }
             }
             if (!dropped.isEmpty()) {
@@ -262,16 +321,12 @@ public final class TriggerRunLog {
         }
     }
 
-    private static boolean isStranded(AdminTriggerRunEntry entry, Set<String> ownNodeIds, long cutoff,
+    private static boolean isStranded(TriggerRunIndex.Summary run, Set<String> ownNodeIds, long cutoff,
             long deadCutoff) {
-        if (entry.getStatus() == TriggerRunStatus.DEAD) {
-            return diedAt(entry) < deadCutoff;
+        if (run.isDead()) {
+            return run.diedAt() < deadCutoff;
         }
-        return !ownNodeIds.contains(entry.getNodeId()) && entry.getFiredAt() < cutoff;
-    }
-
-    private static long diedAt(AdminTriggerRunEntry entry) {
-        return Math.max(entry.getFiredAt(), entry.getLastErrorAt());
+        return !ownNodeIds.contains(run.nodeId()) && run.firedAt() < cutoff;
     }
 
     public static Set<String> ownNodeIds() {

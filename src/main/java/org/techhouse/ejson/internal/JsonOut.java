@@ -18,4 +18,8 @@ public sealed interface JsonOut permits Utf8JsonOut, CharJsonOut, Utf8CountingJs
     default void appendEscaped(String text) {
         JsonStrings.appendEscapedRuns(this, text);
     }
+
+    default void appendPlainAscii(String text) {
+        append(text);
+    }
 }

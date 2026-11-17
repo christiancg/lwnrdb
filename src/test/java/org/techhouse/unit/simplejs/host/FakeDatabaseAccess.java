@@ -16,6 +16,8 @@ public class FakeDatabaseAccess implements DatabaseAccess {
     public JsonObject nextFindResult;
     public String denyMessage;
     public boolean rejectNestedTransaction;
+    public long nextDeletedCount;
+    public long nextUpdatedCount;
     private boolean inTransaction;
 
     @Override
@@ -40,6 +42,13 @@ public class FakeDatabaseAccess implements DatabaseAccess {
     }
 
     @Override
+    public JsonObject insert(String db, String coll, JsonObject document) {
+        calls.add("insert:" + db + "/" + coll);
+        maybeDeny();
+        return document;
+    }
+
+    @Override
     public BulkSaveOutcome bulkSave(String db, String coll, List<JsonObject> documents) {
         calls.add("bulkSave:" + db + "/" + coll + "/" + documents.size());
         maybeDeny();
@@ -50,6 +59,21 @@ public class FakeDatabaseAccess implements DatabaseAccess {
     public void delete(String db, String coll, String id) {
         calls.add("delete:" + db + "/" + coll + "/" + id);
         maybeDeny();
+    }
+
+    @Override
+    public long deleteWhere(String db, String coll, JsonObject condition) {
+        calls.add("deleteWhere:" + db + "/" + coll + "/" + condition.get("field").asJsonString().getValue());
+        maybeDeny();
+        return nextDeletedCount;
+    }
+
+    @Override
+    public long updateWhere(String db, String coll, JsonObject condition, JsonObject patch) {
+        calls.add("updateWhere:" + db + "/" + coll + "/" + condition.get("field").asJsonString().getValue() + "/"
+                + patch.size());
+        maybeDeny();
+        return nextUpdatedCount;
     }
 
     @Override

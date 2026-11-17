@@ -40,6 +40,18 @@ public final class SearchUtils {
         return idCountOf(entries, equalRun(entries, value));
     }
 
+    public static <T> long idCount(List<FieldIndexEntry<T>> entries) {
+        return idCountOf(entries, 0, entries.size());
+    }
+
+    public static <T> long countAnyOf(List<FieldIndexEntry<T>> entries, List<T> operands) {
+        var count = 0L;
+        for (final var run : membershipRuns(entries, operands)) {
+            count += idCountOf(entries, run[0], run[1]);
+        }
+        return count;
+    }
+
     private static <T> long idCountOf(List<FieldIndexEntry<T>> entries, int[] slice) {
         return slice == null ? 0L : idCountOf(entries, slice[0], slice[1]);
     }
@@ -100,16 +112,76 @@ public final class SearchUtils {
     }
 
     public static <T> List<int[]> membershipRuns(List<FieldIndexEntry<T>> entries, List<T> operands) {
-        final var runs = new ArrayList<int[]>();
-        final var starts = new HashSet<Integer>();
+        return walkingIsCheaper(entries.size(), operands.size())
+                ? walkedRuns(entries, operands)
+                : searchedRuns(entries, operands);
+    }
+
+    private static boolean walkingIsCheaper(int entries, int operands) {
+        return (long) operands * (Integer.SIZE - Integer.numberOfLeadingZeros(entries)) > entries;
+    }
+
+    private static <T> List<int[]> searchedRuns(List<FieldIndexEntry<T>> entries, List<T> operands) {
+        final var runs = new ArrayList<int[]>(operands.size());
         for (final var operand : operands) {
-            final var run = equalRun(entries, operand);
-            if (run != null && starts.add(run[0])) {
-                runs.add(run);
+            final var from = partitionPoint(entries, entry -> entry.compareTo(operand) < 0);
+            final var to = gallop(entries, from, entry -> entry.compareTo(operand) <= 0);
+            if (from < to) {
+                runs.add(new int[]{from, to});
             }
         }
-        runs.sort(Comparator.comparingInt(run -> run[0]));
+        if (runs.size() > 1) {
+            runs.sort(Comparator.comparingInt(run -> run[0]));
+            var kept = 1;
+            for (var i = 1; i < runs.size(); i++) {
+                if (runs.get(i)[0] != runs.get(kept - 1)[0]) {
+                    runs.set(kept++, runs.get(i));
+                }
+            }
+            runs.subList(kept, runs.size()).clear();
+        }
         return runs;
+    }
+
+    private static <T> List<int[]> walkedRuns(List<FieldIndexEntry<T>> entries, List<T> operands) {
+        final var sorted = new ArrayList<>(operands);
+        final var probe = new FieldIndexEntry<T>(null, null, null, null);
+        sorted.sort((left, right) -> {
+            probe.setValue(left);
+            return probe.compareTo(right);
+        });
+        final var runs = new ArrayList<int[]>();
+        var from = 0;
+        for (final var operand : sorted) {
+            from = gallop(entries, from, entry -> entry.compareTo(operand) < 0);
+            final var to = gallop(entries, from, entry -> entry.compareTo(operand) <= 0);
+            if (from < to) {
+                runs.add(new int[]{from, to});
+                from = to;
+            }
+        }
+        return runs;
+    }
+
+    private static <E> int gallop(List<E> entries, int from, Predicate<? super E> before) {
+        final var size = entries.size();
+        var low = from;
+        var high = from;
+        var step = 1L;
+        while (high < size && before.test(entries.get(high))) {
+            low = high + 1;
+            high = (int) Math.min(from + step, size);
+            step <<= 1;
+        }
+        while (low < high) {
+            final var middle = (low + high) >>> 1;
+            if (before.test(entries.get(middle))) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        return low;
     }
 
     private static <T> Set<String> findingWindow(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType,
@@ -202,22 +274,35 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> findingMembership(List<FieldIndexEntry<T>> entries, List<T> value, boolean present) {
-        final var matched = new HashSet<String>();
-        for (final var run : membershipRuns(entries, value)) {
-            matched.addAll(toIdSet(entries, run[0], run[1]));
-        }
+        final var runs = membershipRuns(entries, value);
         if (present) {
+            final var matched = new HashSet<String>();
+            for (final var run : runs) {
+                addIds(matched, entries, run[0], run[1]);
+            }
             return matched;
         }
-        final var ids = new HashSet<String>();
-        for (final var entry : entries) {
-            for (final var id : entry.getIds()) {
-                if (!matched.contains(id)) {
-                    ids.add(id);
-                }
+        var matchedIds = 0L;
+        for (final var run : runs) {
+            matchedIds += idCountOf(entries, run[0], run[1]);
+        }
+        final var complement = HashSet
+                .<String>newHashSet(Math.clamp(idCount(entries) - matchedIds, 0, Integer.MAX_VALUE));
+        var from = 0;
+        for (final var run : runs) {
+            addIds(complement, entries, from, run[0]);
+            from = run[1];
+        }
+        addIds(complement, entries, from, entries.size());
+        return complement;
+    }
+
+    private static <T> void addIds(Set<String> ids, List<FieldIndexEntry<T>> entries, int from, int to) {
+        if (from < to) {
+            for (final var entry : entries.subList(from, to)) {
+                ids.addAll(entry.getIds());
             }
         }
-        return ids;
     }
 
     private static <T> Set<String> findingContains(List<FieldIndexEntry<T>> entries, T value) {

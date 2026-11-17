@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Lwnrdb.Client/Lwnrdb.Client.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Lwnrdb.Client.Tests/Lwnrdb.Client.Tests.csproj" />
+    <Project Path="tests/Lwnrdb.Client.IntegrationTests/Lwnrdb.Client.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/build-tools/">
+    <Project Path="build-tools/Lwnrdb.DocGen/Lwnrdb.DocGen.csproj" />
+  </Folder>
+</Solution>

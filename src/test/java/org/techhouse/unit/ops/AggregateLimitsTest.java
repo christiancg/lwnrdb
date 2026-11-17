@@ -48,6 +48,8 @@ public class AggregateLimitsTest {
     void tearDown() throws Exception {
         TestUtils.setPrivateField(configuration, "maxFilterOperands", ConfigKey.MAX_FILTER_OPERANDS.defaultValue());
         TestUtils.setPrivateField(configuration, "aggregateTimeoutMs", ConfigKey.AGGREGATE_TIMEOUT_MS.defaultValue());
+        TestUtils.setPrivateField(configuration, "aggregationScriptTimeoutMs",
+                ConfigKey.AGGREGATION_SCRIPT_TIMEOUT_MS.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -166,6 +168,7 @@ public class AggregateLimitsTest {
     @Test
     public void test_a_pipeline_past_its_time_budget_answers_408_6() throws Exception {
         TestUtils.setPrivateField(configuration, "aggregateTimeoutMs", 1L);
+        TestUtils.setPrivateField(configuration, "aggregationScriptTimeoutMs", 600_000L);
         final var response = run(aggregate("{\"type\":\"FILTER\",\"operator\":{\"script\":"
                 + "\"export default (doc) => { let s = 0; for (let i = 0; i < 2000; i++) { s += i; } return s > 0; };\"}}"));
         assertEquals(ErrorCode.AGGREGATE_TIMEOUT.getCode(), response.getErrorCode(), response.getMessage());

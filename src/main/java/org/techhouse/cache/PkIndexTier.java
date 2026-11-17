@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.VacuumedPage;
 
@@ -46,11 +47,27 @@ final class PkIndexTier {
         return snapshotForLockFreeReader(dbName, collName, collectionIdentifier);
     }
 
+    WriterPkRows forWriter(String dbName, String collName, Collection<String> ids) throws IOException {
+        final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        if (resident(collectionIdentifier) == null && cache.locks().holdsCollectionLock(dbName, collName)
+                && pointScansOnly(dbName, collName, collectionIdentifier)) {
+            final var found = ids.isEmpty()
+                    ? Map.<String, PkIndexEntry>of()
+                    : cache.fs().pkRowsFor(dbName, collName, ids);
+            return WriterPkRows.scanned(found);
+        }
+        return WriterPkRows.of(loadIfNecessary(dbName, collName));
+    }
+
     private List<PkIndexEntry> admit(String dbName, String collName, String collectionIdentifier,
             List<PkIndexEntry> fromDisk) {
         final var admitted = resident(collectionIdentifier);
         if (admitted != null) {
             return admitted;
+        }
+        final var displaced = cache.sizes().refusedPk(collectionIdentifier);
+        if (displaced != null && displaced.displaced() && crowdsFieldIndexes(displaced.bytes())) {
+            return fromDisk;
         }
         final var rows = fromDisk.size();
         final var minimumEntryBytes = CacheSizeEstimator.minimumPkEntryBytes();
@@ -77,7 +94,12 @@ final class PkIndexTier {
 
     private void refuse(String dbName, String collName, String collectionIdentifier, long bytesPerEntry, long rows) {
         cache.sizes().refusePk(collectionIdentifier, bytesPerEntry, rows);
-        cache.fitWarnings().pkIndexOutgrows(dbName, collName, bytesPerEntry * rows, cache.maxMemoryBytes());
+        cache.fitWarnings().pkIndexRefused(dbName, collName, bytesPerEntry * rows, cache.maxMemoryBytes(),
+                cache.footprintBytes());
+    }
+
+    private boolean crowdsFieldIndexes(long bytes) {
+        return !cache.admissionFeasible(AccessKind.FIELD_INDEX, bytes);
     }
 
     private List<PkIndexEntry> snapshotForLockFreeReader(String dbName, String collName, String collectionIdentifier)
@@ -192,6 +214,11 @@ final class PkIndexTier {
         return resident instanceof PkIndexList list ? list.publishedSize() : resident.size();
     }
 
+    boolean pointScansOnly(String dbName, String collName) {
+        return resident(Cache.getCollectionIdentifier(dbName, collName)) == null
+                && pointScansOnly(dbName, collName, Cache.getCollectionIdentifier(dbName, collName));
+    }
+
     private boolean pointScansOnly(String dbName, String collName, String collectionIdentifier) {
         if (UserCache.isReservedDatabase(dbName)) {
             return false;
@@ -201,7 +228,8 @@ final class PkIndexTier {
         }
         final var refused = cache.sizes().refusedPk(collectionIdentifier);
         if (refused != null) {
-            return !cache.admissionFeasible(AccessKind.PK_INDEX, refused.bytes());
+            return !cache.admissionFeasible(AccessKind.PK_INDEX, refused.bytes())
+                    || refused.displaced() && crowdsFieldIndexes(refused.bytes());
         }
         final var rows = cache.fs().trustedLiveRows(dbName, collName);
         final var minimumEntryBytes = CacheSizeEstimator.minimumPkEntryBytes();

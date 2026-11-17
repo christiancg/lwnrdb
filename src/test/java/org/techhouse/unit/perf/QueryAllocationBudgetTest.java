@@ -30,8 +30,8 @@ public class QueryAllocationBudgetTest {
     private static final int BULK = 1_000;
     private static final int WARM_UPS = 5;
     private static final long PAGE_SIZE = 64 * 1024L;
-    private static final long SKIP_SOURCE_PAGE_BUDGET = 433_170;
-    private static final long GROUP_MAP_REMOVE_BUDGET_PER_DOC = 107;
+    private static final long SKIP_SOURCE_PAGE_BUDGET = 431_871;
+    private static final long GROUP_MAP_REMOVE_BUDGET_PER_DOC = 86;
     private static final String SKIP_PAGE = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
             {"type":"SKIP","skip":9000},{"type":"LIMIT","limit":100}]}""";

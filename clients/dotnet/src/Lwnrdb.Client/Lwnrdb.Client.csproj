@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Lwnrdb.Client</RootNamespace>
+    <PackageId>Lwnrdb.Client</PackageId>
+    <Version>0.0.0-dev</Version>
+    <Authors>christiancg</Authors>
+    <Description>The official .NET client for LWNRDB: a connection pool, a fluent query builder, a LINQ provider, transactions and live queries</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/christiancg/lwnrdb/tree/main/clients/dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/christiancg/lwnrdb.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>lwnrdb;database;nosql;client;linq</PackageTags>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lwnrdb.Client.Tests" />
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <ProjectReference Include="../../build-tools/Lwnrdb.DocGen/Lwnrdb.DocGen.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" GlobalPropertiesToRemove="TargetFramework" />
+  </ItemGroup>
+  <PropertyGroup>
+    <DocGenAssembly>$(MSBuildThisFileDirectory)../../build-tools/Lwnrdb.DocGen/bin/$(Configuration)/net10.0/Lwnrdb.DocGen.dll</DocGenAssembly>
+    <ApiDocsFolder>$(MSBuildThisFileDirectory)../../apidocs</ApiDocsFolder>
+  </PropertyGroup>
+  <Target Name="GenerateApiDocs" AfterTargets="CopyFilesToOutputDirectory" Inputs="@(IntermediateAssembly);@(ApiDocs)" Outputs="@(DocFileItem)">
+    <Exec Command="&quot;$(DOTNET_HOST_PATH)&quot; &quot;$(DocGenAssembly)&quot; &quot;@(IntermediateAssembly->'%(FullPath)')&quot; &quot;$(ApiDocsFolder)&quot; &quot;@(DocFileItem->'%(FullPath)')&quot;" />
+    <Copy SourceFiles="@(DocFileItem)" DestinationFolder="$(OutDir)" />
+  </Target>
+  <ItemGroup>
+    <ApiDocs Include="$(ApiDocsFolder)/*.md" />
+  </ItemGroup>
+</Project>

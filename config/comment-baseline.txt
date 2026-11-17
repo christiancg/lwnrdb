@@ -34,7 +34,6 @@ src/main/java/org/techhouse/data/admin/AdminUserEntry.java 2
 src/main/java/org/techhouse/ejson/custom_types/CustomTypeFactory.java 1
 src/main/java/org/techhouse/ejson/custom_types/GeoDistanceComparator.java 1
 src/main/java/org/techhouse/ejson/custom_types/JsonGeo.java 2
-src/main/java/org/techhouse/ejson/custom_types/JsonVector.java 1
 src/main/java/org/techhouse/ejson/internal/JsonStrings.java 2
 src/main/java/org/techhouse/ejson/internal/NumberFormatter.java 2
 src/main/java/org/techhouse/ejson/internal/ReflectionUtils.java 4
@@ -42,7 +41,6 @@ src/main/java/org/techhouse/ejson/internal/UnsafeAllocator.java 1
 src/main/java/org/techhouse/ejson/validate/MetaSchemaValidator.java 1
 src/main/java/org/techhouse/ejson/validate/SchemaKeywords.java 2
 src/main/java/org/techhouse/ejson/validate/SchemaValidator.java 1
-src/main/java/org/techhouse/fs/DocumentPageStore.java 2
 src/main/java/org/techhouse/fs/FieldIndexLoader.java 3
 src/main/java/org/techhouse/fs/FileLocks.java 3
 src/main/java/org/techhouse/fs/FilePaths.java 4
@@ -58,7 +56,7 @@ src/main/java/org/techhouse/ops/OperationProcessor.java 2
 src/main/java/org/techhouse/ops/ReplicatedApplyHelper.java 1
 src/main/java/org/techhouse/ops/SaveOperationHelper.java 7
 src/main/java/org/techhouse/ops/SchemaOperationHelper.java 1
-src/main/java/org/techhouse/ops/SchemaValidationHelper.java 2
+src/main/java/org/techhouse/ops/SchemaValidationHelper.java 1
 src/main/java/org/techhouse/ops/TransactionOperationHelper.java 4
 src/main/java/org/techhouse/ops/TwoPhaseParticipant.java 3
 src/main/java/org/techhouse/ops/Tx2pcLog.java 2

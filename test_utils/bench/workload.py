@@ -21,6 +21,7 @@ class Settings:
     warmup: float
     seed: int
     durability: str = "relaxed"
+    bulk_warmup: float = 0.5
     category_size: int = 100
     limit: int = 50
 
@@ -83,6 +84,10 @@ def phases(settings: Settings) -> list:
     counts = scaled(2_000)
     scans = scaled(200)
 
+    batches = math.ceil(settings.docs / settings.batch)
+    bulk_warm = min(int(batches * settings.bulk_warmup), batches - 1)
+    bulk_timed = batches - bulk_warm
+
     def bulk_argument(_rng, n):
         start = n * settings.batch
         return [make_doc(f"d{i}", i, settings) for i in range(start, min(start + settings.batch, settings.docs))]
@@ -110,8 +115,9 @@ def phases(settings: Settings) -> list:
         return count > 0 if argument < PRICE_RANGE * 0.99 else count >= 0
 
     return [
-        Phase("bulk_insert", math.ceil(settings.docs / settings.batch), 0, bulk_argument,
-              lambda engine, docs: engine.bulk_insert(docs), _always, documents=settings.docs),
+        Phase("bulk_insert", bulk_timed, bulk_warm, bulk_argument,
+              lambda engine, docs: engine.bulk_insert(docs), _always,
+              documents=min(bulk_timed * settings.batch, settings.docs)),
         Phase("insert", inserts, warm(inserts), lambda _rng, n: make_doc(f"i{n}", settings.docs + n, settings),
               lambda engine, doc: engine.insert(doc), _always),
         Phase("get_by_id", reads, warm(reads), random_key, lambda engine, key: engine.get(key),

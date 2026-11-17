@@ -110,10 +110,13 @@ public final class ControlRequestValidator {
         }
         final var action = FaultInjector.parse(FaultAction.class, request.getAction());
         if (action == null) {
-            return ValidationResult.fail("action must be PAUSE, HALT or DROP");
+            return ValidationResult.fail("action must be PAUSE, HALT, DROP or FAIL");
         }
         if (action == FaultAction.DROP && !point.isDroppable()) {
             return ValidationResult.fail("only a message fault point can drop");
+        }
+        if (action == FaultAction.FAIL && !point.isFailable()) {
+            return ValidationResult.fail("only a failable fault point can fail");
         }
         return ValidationResult.ok();
     }

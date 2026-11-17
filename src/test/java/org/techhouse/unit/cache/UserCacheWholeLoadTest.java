@@ -447,7 +447,7 @@ public class UserCacheWholeLoadTest {
         final List<FieldIndexEntry<?>> survivors = List.of(base.get(String.class).getFirst(),
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "closed", new HashSet<>(added)));
         fs.appendIndexLog(TestGlobals.DB, TestGlobals.COLL, "status", "String",
-                List.of(new IndexLogChange("closed", added, List.of())), survivors);
+                List.of(new IndexLogChange("closed", added, List.of())), survivors, false);
         final var loaded = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, "status", String.class);
         final var indexBytes = fs.indexFileBytes(TestGlobals.DB, TestGlobals.COLL, "status", "String");
 

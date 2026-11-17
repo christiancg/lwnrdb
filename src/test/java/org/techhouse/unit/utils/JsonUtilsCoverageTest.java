@@ -40,11 +40,11 @@ public class JsonUtilsCoverageTest {
     }
 
     @Test
-    public void test_hash_element_is_stable_and_hex() {
+    public void test_hash_element_is_stable_and_lowercase_base32() {
         final var h1 = JsonUtils.hashElement(sample());
         final var h2 = JsonUtils.hashElement(sample());
         assertEquals(h1, h2);
-        assertTrue(h1.matches("[0-9a-f]+"));
+        assertTrue(h1.matches("[0-9a-v]{26}"));
     }
 
     @Test

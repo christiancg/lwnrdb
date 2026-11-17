@@ -79,8 +79,12 @@ before authenticating, send any line of more than 65 536 bytes, for example
 ```
 
 A line much denser than real data (more than one JSON token per 4 bytes of the line limit, such as a
-`LIST_DATABASES` carrying a flat array of 20 000 ones before authenticating) is answered
-`The command is not valid` instead, and the connection stays open.
+`LIST_DATABASES` carrying a flat array of 20 000 ones before authenticating) is answered `400-43` instead, and the
+connection stays open. The parser stops before it reads `type`, so the reply's `type` is `null`:
+
+```json
+{"type": null, "status": "ERROR", "message": "The command is not valid", "errorCode": "400-43"}
+```
 
 A connection that has not authenticated within `authTimeoutMs` (10 s by default) of being accepted → `408-4`,
 sent as a `CLOSE_CONNECTION` frame, and the connection is closed. Failed `AUTHENTICATE` attempts, blank lines
@@ -128,6 +132,67 @@ requests without reading; a client that catches up within a second reads this as
 ```json
 {"type": "CLOSE_CONNECTION", "status": "ERROR", "message": "The connection's outbound buffer overflowed", "errorCode": "413-1"}
 ```
+
+Responses waiting to be written across every connection past `maxUnsentResponseBytes` (a quarter of the heap
+by default; start a server with `maxUnsentResponseBytes=10Mb`) → `503-17` for the read whose response would
+cross it; a response under 64Kb and the response to a write are always delivered. Open three connections, each sending an `AGGREGATE` whose
+result is ~3 MB without reading it, then send the same `AGGREGATE` from a fourth connection that reads:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The server holds the maximum bytes of unsent responses; retry shortly", "errorCode": "503-17"}
+```
+
+A read of a collection held by a committed transaction that could not finish applying (a `500-33` fence, or a
+startup replay that hit a full disk) → `503-18` once `transactionLockTimeoutMs` passes, instead of waiting until the
+fence clears. Fill the disk, kill the server while a transaction commits, start it on the full disk, then count the
+collection:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The collection is held by a committed transaction that has not finished applying; retry shortly", "errorCode": "503-18"}
+```
+
+A read is also refused with `503-18` when the commit fences the collection while the read is already waiting for
+it: the waiting read re-checks the fence every 200 ms instead of waiting out the whole commit.
+
+A read (scan, `FIND_BY_ID` or `AGGREGATE`, not a dirty read) of a collection holding a forced write that could neither be
+applied nor taken back (the write answered `500-34`) first applies the logged writes; while that still fails, because
+the disk is still full, it answers `503-19` instead of scanning pages that may hold a copy the write meant to blank.
+Fill the disk until a `SAVE` answers `500-34`, keep it full, then count the collection:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly", "errorCode": "503-19"}
+```
+
+Free the disk and the same request answers normally (the read applies the log first).
+
+Running pipelines together past `aggregateTotalHeldBytes` (a quarter of the heap by default; start a server with
+`aggregateMaxResultBytes=16mb` and `aggregateTotalHeldBytes=14mb` over 15000 documents of ~200 bytes) → `503-20` for the
+pipeline that would cross it. Run the same `GROUP_BY` from two connections at once: one answers, the other gets
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The server holds the maximum bytes of running aggregations; retry shortly", "errorCode": "503-20"}
+```
+
+and the same request answers once it runs alone.
+
+Open transactions together past `transactionTotalMaxBytes` (a quarter of the heap by default; start a server with
+`transactionTotalMaxBytes=200kb`) → `503-21` for the buffered write that would cross it. Buffer three 60 KB documents
+in one transaction, then save one in a second transaction on another collection:
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly", "errorCode": "503-21"}
+```
+
+The second transaction stays usable: commit the first and the retried `SAVE` buffers.
+
+A connection whose response write moves less than 64 KB in `clientWriteStallTimeoutMs` (30000 by default, at least
+1000) is closed by the server and its transaction rolled back; the three non-readers above are closed once it
+passes, which frees the budget for the fourth, and so is a connection that reads a large response 16 KB at a time with
+a pause of half the timeout between reads.
+
+With `authVerifierCacheEnabled=true` (the default) a second `AUTHENTICATE` with the same password answers without
+recomputing the password hash; a wrong password after a cached success is still refused and still counts toward
+`maxFailedAuthAttempts`, and the old password stops working right after a `SET_PASSWORD`.
 
 A non-admin `SET_PASSWORD` on another user → `403-1` whether or not that user exists:
 
@@ -226,9 +291,12 @@ larger than `maxEntrySize` (a key shared by a few thousand remote documents), in
 
 A pipeline that builds more than `aggregateMaxResultBytes` (256 MB) in total → `400-36`: the strings and `SCRIPT`
 values its `MAP`s add (a few hundred distinct script sources each returning a large string count together), each
-`JOIN` row's joined array (once per row, even when rows share one array) and one byte per result row. For
-example 300 documents each given a 1 MB `CONCAT`, or a `JOIN` that attaches the same 1 MB group to every row of a large
-collection:
+`JOIN` row's joined array (once per row, even when rows share one array), the modelled heap of the documents a
+`GROUP_BY`, an unbounded `SORT`, a `JOIN` (both sides) or a `DISTINCT` holds while it works, and the modelled heap of
+every result row (the first 64 rows of a step measured exactly, then every 64th, the rest charged the running
+average). For example 300 documents each given a 1 MB `CONCAT`, a `JOIN` that attaches the same 1 MB group to every
+row of a large collection, or a `GROUP_BY` over a collection whose documents take more than the budget (a
+`GROUP_BY` followed directly by `COUNT` holds only the distinct values and still answers):
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "orders", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "big", "operator": {"type": "CONCAT", "operands": ["blob", "blob"]}}]}]}
@@ -239,7 +307,7 @@ collection:
 ```
 
 A `#vector(...)` literal with more than `maxVectorDimensions` (16 384) components is refused while the request
-is parsed: `The command is not valid`.
+is parsed: `400-43` (`The command is not valid`).
 
 `SAVE_SCHEDULE` with a `timeoutMs` above `scheduleMaxTimeoutMs` (300 000) → `400-29`:
 
@@ -407,6 +475,23 @@ Update an object
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": { "name": "test with id updated 1", "_id": "1234" }}
 ```
 
+Refuse to overwrite: `failOnUpdate` on the id saved above → `409-18`, and `1234` keeps its body (the same request with
+a new `_id` is an ordinary insert)
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "failOnUpdate": true, "object": { "name": "never written", "_id": "1234" }}
+```
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "A document with this _id already exists", "errorCode": "409-18"}
+```
+
+`failOnUpdate` beside a `condition` → `400-1`
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "failOnUpdate": true, "condition": {"fieldOperatorType": "EQUALS", "field": "name", "value": "test"}, "object": { "name": "x" }}
+```
+
 Insert after update
 
 ```json
@@ -462,10 +547,54 @@ set `maxEntrySize=1Kb` in `lwnrdb.cfg` and send a document whose `blob` alone is
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "too-big", "blob": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
 ```
 
+Update every document matching a condition (the same operator an AGGREGATE FILTER step takes): `object` is merged into
+each match, its top-level fields added or replaced and every other field kept; the reply carries `updatedCount`, and
+matching nothing is `OK` with `updatedCount` 0
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "condition": {"conjunctionType": "AND", "operators": [{"fieldOperatorType": "EQUALS", "field": "status", "value": "pending"}, {"fieldOperatorType": "SMALLER_THAN", "field": "total", "value": 100}]}, "object": {"status": "expired", "expiredBy": "sweeper"}}
+```
+
+```json
+{"type": "SAVE", "status": "OK", "message": "Updated 2 document(s)", "updatedCount": 2}
+```
+
+A SAVE with both a `condition` and an `_id` (beside `object` or inside it), or with a `condition` and an empty
+`object` → `400-1`
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "condition": {"fieldOperatorType": "EQUALS", "field": "status", "value": "pending"}, "object": {"_id": "1234", "status": "expired"}}
+```
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "SAVE takes either an _id or a condition, not both", "errorCode": "400-1"}
+```
+
 Delete the one with id 1234
 
 ```json
 {"type": "DELETE", "databaseName": "test", "collectionName": "testCollection", "_id": "1234"}
+```
+
+Delete every document matching a condition (the same operator an AGGREGATE FILTER step takes); the reply carries
+`deletedCount`, and matching nothing is `OK` with `deletedCount` 0
+
+```json
+{"type": "DELETE", "databaseName": "test", "collectionName": "testCollection", "condition": {"conjunctionType": "AND", "operators": [{"fieldOperatorType": "EQUALS", "field": "status", "value": "archived"}, {"fieldOperatorType": "SMALLER_THAN", "field": "total", "value": 100}]}}
+```
+
+```json
+{"type": "DELETE", "status": "OK", "message": "Deleted 2 document(s)", "deletedCount": 2}
+```
+
+A DELETE with both an `_id` and a `condition` (or with neither) → `400-1`
+
+```json
+{"type": "DELETE", "databaseName": "test", "collectionName": "testCollection", "_id": "1234", "condition": {"fieldOperatorType": "EQUALS", "field": "status", "value": "archived"}}
+```
+
+```json
+{"type": "DELETE", "status": "ERROR", "message": "DELETE takes either an _id or a condition, not both", "errorCode": "400-1"}
 ```
 
 Find by id
@@ -1066,6 +1195,31 @@ An index on a collection that does not exist → `404-11`, rather than an `OK` f
 {"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "noSuchCollection", "fieldName": "aNumber"}
 ```
 
+Several indexes in one request: `fieldNames` builds every listed field that is not indexed yet in one pass over the
+collection, skipping (not rebuilding) the ones already indexed; the message names both groups. `fieldName` may be sent
+beside it, and their union is indexed.
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": ["aString", "aNumber", "aBoolean"]}
+```
+
+An empty `fieldNames` → `400-1`
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": []}
+```
+
+One invalid name refuses the whole request before anything is built → `400-1` (and a pair of names that differ only by
+case → `409-11`, building neither)
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": ["aDatetime", "a b"]}
+```
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": ["aTime", "ATIME"]}
+```
+
 Drop index
 
 ```json
@@ -1523,6 +1677,18 @@ Delete a document (deleting one that is not there is a no-op)
 
 ```json
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ndb.delete(db.name, 'testCollection', 'scripted-1');\ndb.delete(db.name, 'testCollection', 'never-existed');\nreturn db.findById(db.name, 'testCollection', 'scripted-1') === null;"}
+```
+
+Update every document matching a condition and read how many changed
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\nreturn db.updateWhere(db.name, 'testCollection', { fieldOperatorType: 'EQUALS', field: 'from', value: 'script' }, { touched: true });"}
+```
+
+Delete every document matching a condition and read how many went
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\nreturn db.deleteWhere(db.name, 'testCollection', { fieldOperatorType: 'EQUALS', field: 'from', value: 'script' });"}
 ```
 
 Transaction spanning two collections — both writes commit together
@@ -2027,6 +2193,85 @@ sees the database with an empty `collections`, and one with no grant at all gets
 {"type": "GET_DATABASE_STATS", "status": "OK", "message": "Ok", "stats": {"totals": {"databaseCount": 1, "collectionCount": 1, "indexCount": 0, "pageCount": 1, "entryCount": 3, "sizeBytes": 120}, "databases": [{"name": "test", "collectionCount": 1, "indexCount": 0, "pageCount": 1, "entryCount": 3, "sizeBytes": 120, "collections": [{"name": "testCollection", "indexCount": 0, "indexes": [], "pageCount": 1, "entryCount": 3, "sizeBytes": 120}]}]}}
 ```
 
+Ask which build the node runs and whether it is ready — `SERVER_INFO` is answered before `AUTHENTICATE` too, and
+while the server shuts down (`state` `SHUTTING_DOWN` instead of `503-13`)
+
+```json
+{"type": "SERVER_INFO"}
+```
+
+Before authenticating, only the state
+
+```json
+{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY"}}
+```
+
+As any authenticated user, the build too (`version` is `dev` when the server does not run from a packaged jar)
+
+```json
+{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "storageFormatVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231}}
+```
+
+As an admin, the node as well (`nodeId`, `aliveMembers` and `expectedSize` only when clustering is on); an internal
+failure answers `500-35`
+
+```json
+{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "storageFormatVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231, "node": {"clusterEnabled": false, "syncWrites": true, "tlsEnabled": false}}}
+```
+
+Snapshots, what `--dump` reads a database through. Open one, change the collection from a second connection, and the
+snapshot still reads what was there when it opened:
+
+```json
+{"type": "START_SNAPSHOT", "databaseName": "test"}
+```
+
+```json
+{"type": "START_SNAPSHOT", "status": "OK", "message": "Ok", "errorCode": null, "snapshotId": "6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10", "collectionNames": ["testCollection"]}
+```
+
+From another connection update one document, delete another and save a new one, then page the snapshot on the first
+connection (`afterId` is the previous page's `lastId`; leave it out for the first page):
+
+```json
+{"type": "READ_SNAPSHOT", "databaseName": "test", "collectionName": "testCollection", "snapshotId": "6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10", "limit": 2}
+```
+
+```json
+{"type": "READ_SNAPSHOT", "status": "OK", "message": "Ok", "errorCode": null, "results": [{"_id": "a", "aNumber": 1}, {"_id": "b", "aNumber": 2}], "lastId": "b", "done": false}
+```
+
+The updated and the deleted documents come back as they were, the new one never does, and a page can be shorter than
+`limit` while `done` is `false`. Release it when done:
+
+```json
+{"type": "RELEASE_SNAPSHOT", "databaseName": "test", "snapshotId": "6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10"}
+```
+
+The same id from another connection, or after the release, an idle `snapshotIdleTimeoutMs` (5 minutes) or a restart
+→ `404-13`:
+
+```json
+{"type": "READ_SNAPSHOT", "status": "NOT_FOUND", "message": "The snapshot does not exist: it was released or expired, or it belongs to another connection", "errorCode": "404-13"}
+```
+
+Writes past `snapshotMaxBytes` while it is open (start a server with `snapshotMaxBytes=64kb` and bulk-update 400
+documents of 200 bytes), a `DROP_COLLECTION` of one of its collections or a `REINDEX` with `"primaryKey": true` abort it;
+the writes themselves answer `OK`, and every read of the snapshot until it is released → `409-17` with the reason:
+
+```json
+{"type": "READ_SNAPSHOT", "status": "ERROR", "message": "The snapshot was aborted and holds nothing any more; open a new one: it passed snapshotMaxBytes (65536 bytes) keeping the old versions of the documents written since it was opened", "errorCode": "409-17"}
+```
+
+A `START_SNAPSHOT` past `snapshotMaxOpen` (4) open snapshots on the node → `503-22` (retryable); one while a transaction
+on another connection holds a collection of the database for longer than `transactionLockTimeoutMs` → `409-5`; a `START_SNAPSHOT` or
+`READ_SNAPSHOT` on a collection fenced by an unfinished commit → `503-18` without waiting out that timeout; any of the
+three inside a transaction → `409-6`.
+
+```json
+{"type": "START_SNAPSHOT", "status": "ERROR", "message": "The server holds the maximum number of open snapshots; retry shortly", "errorCode": "503-22"}
+```
+
 Custom types
 
 ```json
@@ -2287,6 +2532,27 @@ Re-creating an index that already exists is always allowed:
 
 ```json
 {"type": "CREATE_INDEX", "status": "ERROR", "message": "The collection has the maximum number of indexes (64)", "errorCode": "400-42"}
+```
+
+A `DELETE` whose `condition` matches more than `deleteMaxMatches` (default 100 000) documents → `400-44`; nothing is
+deleted:
+
+```json
+{"type": "DELETE", "status": "ERROR", "message": "The delete condition matches more documents than allowed", "errorCode": "400-44"}
+```
+
+A `SAVE` whose `condition` matches more than `updateMaxMatches` (default 100 000) documents → `400-45`; nothing is
+written:
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The update condition matches more documents than allowed", "errorCode": "400-45"}
+```
+
+A line that is not a valid command (not a JSON object, no known `type`, a field of the wrong shape) → `400-43`. When the
+`type` could be read the reply carries it; otherwise `type` is `null`. The connection stays open:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The command is not valid", "errorCode": "400-43"}
 ```
 
 Comparing a literal or a backreference charges one budget step per 64 characters compared, so `"^(a*)\\1b$"` as a
@@ -2550,7 +2816,7 @@ the rollback answers `409-16` instead (see below).
 
 A transaction left idle longer than `transactionIdleTimeoutMs` (30 s by default) is rolled back by the server:
 its buffered writes are discarded, its locks released, and the connection stays open. The next request on
-that connection, whatever it is except `CLOSE_CONNECTION`, → `409-16` once and is not executed; the one after
+that connection, whatever it is except `CLOSE_CONNECTION` or `SERVER_INFO`, → `409-16` once and is not executed; the one after
 is served normally. Start a transaction and buffer a write
 
 ```json
@@ -3116,7 +3382,9 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
   two nodes of three and write to the survivor.
 - `503-3` — the write committed on its owner, but not enough replicas acknowledged it within
   `replicationAckTimeoutMs`. It is not rolled back; anti-entropy brings the replicas up to date.
-- `503-4` — the owner could not be reached, and the request provably never reached it.
+- `503-4` — the owner could not be reached, and the request provably never reached it. A forwarded read also
+  answers it when the owner was reached but did not answer within `replicationAckTimeoutMs`, instead of reading the
+  edge's copy: arm `PEER_REPLY` `DROP` with match `FORWARD_REQUEST` on the owner and read through another node.
 - `503-8` — a forwarded write whose owner did not report an outcome. It may already have applied, so check
   before retrying. Also a write that applied on its owner but whose ownership moved before it could replicate:
   it is on that node and anti-entropy spreads it, so it is not answered `421-1`. Reproduce it with the fault seam
@@ -3168,7 +3436,13 @@ An unknown point → `400-1`
 {"type": "ARM_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "action": "DROP"}
 ```
 
-An unknown action (anything but `PAUSE`, `HALT` or `DROP`) → `400-1`
+`FAIL` on a point that cannot fail (anything but `FILE_FORCED`) → `400-1`
+
+```json
+{"type": "ARM_FAULT", "point": "WAL_APPENDED", "action": "FAIL"}
+```
+
+An unknown action (anything but `PAUSE`, `HALT`, `DROP` or `FAIL`) → `400-1`
 
 ```json
 {"type": "ARM_FAULT", "point": "ANTI_ENTROPY_SNAPSHOTTED", "action": "DELAY"}
@@ -3203,6 +3477,14 @@ nothing.
 {"type": "ARM_FAULT", "point": "WAL_APPENDED", "action": "HALT", "match": "test|testCollection"}
 ```
 
+`FILE_FORCED` with `FAIL` makes the next force of the named file throw, as a failed `fsync` would: its `match` is a
+file name, or a folder name followed by `/`. Arm it on the collection's log and send a `SAVE`: the write whose
+force failed answers a `500-*` and is not acknowledged
+
+```json
+{"type": "ARM_FAULT", "point": "FILE_FORCED", "action": "FAIL", "match": "testCollection.wal"}
+```
+
 Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not
 be read — and cannot be provoked from this playbook; the server log names the cause. That includes a
 `DELETE_PROCEDURE`, `DELETE_SCHEDULE`, `DELETE_TRIGGER` or `DELETE_SCHEMA` whose file could not be removed
@@ -3211,4 +3493,14 @@ back on the next load. One of them changes what a
 client does next: `500-33` is a commit that failed after its commit point. The transaction stays open and keeps
 its locks, and re-sending `COMMIT_TRANSACTION` finishes it once the fault is gone. Until then a `SAVE`,
 `BULK_SAVE` or `DELETE` sent on that connection answers `500-33` too and is not buffered: an op added after the
-commit point would be applied by recovery although the client never committed it, and could never be rolled back.
+commit point would be applied by recovery although the client never committed it, and could never be rolled back. The
+server also re-drives that commit by itself, with a backoff from 100 ms up to 5 s, on the connection's own thread
+(the one that holds the locks), both while the client is idle and after it disconnects, so freeing the space
+unblocks the collections without a restart; a `COMMIT_TRANSACTION` re-sent after such a background finish answers
+`OK`.
+
+`500-34` is the single-document counterpart: a `SAVE`, `BULK_SAVE` or `DELETE` (or any other write) whose
+write-ahead-log record was forced but which could neither be applied nor taken back, because the disk filled
+between the two. The record is the commit point, so the write may already have taken effect: it is applied before
+the collection is next read or written (marking its documents pending for the indexes and evicting their cached
+copies), or at the next startup. Treat it like `503-8`: retrying is only safe for an idempotent write.

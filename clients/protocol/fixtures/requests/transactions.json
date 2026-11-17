@@ -1,0 +1,11 @@
+{
+  "area": "transactions",
+  "cases": [
+    {"name":"transactions.start","request":{"type":"START_TRANSACTION"}},
+    {"name":"transactions.commit","request":{"type":"COMMIT_TRANSACTION"}},
+    {"name":"transactions.rollback","request":{"type":"ROLLBACK_TRANSACTION"}},
+    {"name":"transactions.list","request":{"type":"LIST_TRANSACTIONS"}},
+    {"name":"transactions.resolve_commit","request":{"type":"RESOLVE_TRANSACTION","dtxId":"550e8400-e29b-41d4-a716-446655440000","decision":"commit"}},
+    {"name":"transactions.resolve_abort","request":{"type":"RESOLVE_TRANSACTION","dtxId":"550e8400-e29b-41d4-a716-446655440000","decision":"abort"}}
+  ]
+}

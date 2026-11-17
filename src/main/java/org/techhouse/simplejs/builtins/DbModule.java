@@ -23,6 +23,7 @@ import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsString;
@@ -31,6 +32,7 @@ import org.techhouse.simplejs.values.JsValue;
 
 public final class DbModule {
     private static final int PAYLOAD_INDEX = 2;
+    private static final int PATCH_INDEX = 3;
     private static final String PK_FIELD = "_id";
     private static final String DATABASE_NAME = "database name";
     private static final String COLLECTION_NAME = "collection name";
@@ -39,12 +41,18 @@ public final class DbModule {
     private DbModule() {
     }
 
+    @FunctionalInterface
+    private interface DocumentWrite {
+        JsonObject apply(String db, String coll, JsonObject document);
+    }
+
     public static JsObject create(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
             ResourceLimits limits) {
         final var db = new JsObject();
         db.set("findById", hostCall("findById", ops, args -> findById(database, ops, args)));
         db.set("aggregate", hostCall("aggregate", ops, args -> aggregate(database, ops, args)));
-        db.set("save", hostCall("save", ops, args -> save(database, ops, args)));
+        db.set("save", hostCall("save", ops, args -> write("save", database::save, ops, args)));
+        db.set("insert", hostCall("insert", ops, args -> write("insert", database::insert, ops, args)));
         db.set("bulkSave", hostCall("bulkSave", ops, args -> bulkSave(database, ops, args)));
         db.set("cursor", hostCall("cursor", ops, args -> cursor(database, ops, intrinsics, limits, args)));
         db.set("delete", hostCall("delete", ops, args -> {
@@ -52,6 +60,8 @@ public final class DbModule {
                     requireString(args, 1, "delete", COLLECTION_NAME), requireString(args, 2, "delete", ID));
             return JsUndefined.getInstance();
         }));
+        db.set("deleteWhere", hostCall("deleteWhere", ops, args -> deleteWhere(database, ops, args)));
+        db.set("updateWhere", hostCall("updateWhere", ops, args -> updateWhere(database, ops, args)));
         db.set("listCollections", hostCall("listCollections", ops, args -> toStringArray(
                 database.listCollections(requireString(args, 0, "listCollections", DATABASE_NAME)))));
         db.set("listDatabases", hostCall("listDatabases", ops, _ -> toStringArray(database.listDatabases())));
@@ -87,11 +97,11 @@ public final class DbModule {
         return array;
     }
 
-    private static JsValue save(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var dbName = requireString(args, 0, "save", DATABASE_NAME);
-        final var collName = requireString(args, 1, "save", COLLECTION_NAME);
-        final var document = requireDocument(payloadArg(args, ops));
-        final var saved = database.save(dbName, collName, document);
+    private static JsValue write(String method, DocumentWrite access, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, method, DATABASE_NAME);
+        final var collName = requireString(args, 1, method, COLLECTION_NAME);
+        final var document = requireObject(payloadArg(args, ops), "db." + method + " expects a document");
+        final var saved = access.apply(dbName, collName, document);
         InterpreterOps.charge(ops, EJsonInterop.estimatedBytes(saved));
         return EJsonInterop.fromEjson(saved);
     }
@@ -110,6 +120,23 @@ public final class DbModule {
         final var result = database.bulkSave(dbName, collName, documents);
         InterpreterOps.chargeElements(ops, (long) result.inserted().size() + result.updated().size());
         return outcome(result);
+    }
+
+    private static JsValue deleteWhere(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, "deleteWhere", DATABASE_NAME);
+        final var collName = requireString(args, 1, "deleteWhere", COLLECTION_NAME);
+        final var condition = requireObject(payloadArg(args, ops), "db.deleteWhere expects a condition object");
+        return new JsNumber(database.deleteWhere(dbName, collName, condition));
+    }
+
+    private static JsValue updateWhere(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, "updateWhere", DATABASE_NAME);
+        final var collName = requireString(args, 1, "updateWhere", COLLECTION_NAME);
+        final var condition = requireObject(payloadArg(args, ops), "db.updateWhere expects a condition object");
+        final var patch = requireObject(
+                args.size() > PATCH_INDEX ? EJsonInterop.toHostPayload(args.get(PATCH_INDEX), ops) : null,
+                "db.updateWhere expects an object of fields to set");
+        return new JsNumber(database.updateWhere(dbName, collName, condition, patch));
     }
 
     private static JsValue cursor(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
@@ -294,11 +321,11 @@ public final class DbModule {
         return args.size() > PAYLOAD_INDEX ? EJsonInterop.toHostPayload(args.get(PAYLOAD_INDEX), ops) : null;
     }
 
-    private static JsonObject requireDocument(JsonBaseElement converted) {
+    private static JsonObject requireObject(JsonBaseElement converted, String message) {
         if (converted instanceof JsonObject object) {
             return object;
         }
-        throw new TypeErrorException("db.save expects a document");
+        throw new TypeErrorException(message);
     }
 
     private static JsonArray requireArray(JsonBaseElement converted, String message) {

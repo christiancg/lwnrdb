@@ -32,10 +32,10 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.PartitionedMissCache;
 import org.techhouse.cache.UserCache;
+import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.SizeParser;
 import org.techhouse.config.ValueType;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.OutboundQueue;
@@ -48,7 +48,9 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.DeferredWrites;
 import org.techhouse.ops.auth.AuthFailureThrottle;
+import org.techhouse.ops.index.IdleIndexFolds;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.utils.ReflectionUtils;
@@ -62,11 +64,13 @@ public class TestUtils {
         fs.createAdminDatabase();
         final var cache = IocContainer.get(Cache.class);
         cache.loadAdminData();
+        DeferredWrites.install();
     }
 
     public static void standardTearDown() throws NoSuchFieldException, IllegalAccessException {
         deleteDir(new File(TestGlobals.PATH));
         clearCache();
+        IdleIndexFolds.forgetDatabase(TestGlobals.DB);
         discardQueuedBackgroundEvents(IocContainer.get(BackgroundTaskManager.class));
     }
 
@@ -83,6 +87,9 @@ public class TestUtils {
         TestUtils.setPrivateField(
                 TestUtils.getPrivateField(IocContainer.get(Cache.class), "absentIndexTypes", Object.class),
                 "byCollection", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(
+                TestUtils.getPrivateField(IocContainer.get(Cache.class), "scanRefusals", Object.class), "refusals",
+                new ConcurrentHashMap<>());
         TestUtils.setPrivateField(pageCacheOf(adminCache), "pages", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(pageCacheOf(adminCache), "pagesPkIndexes", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
@@ -162,8 +169,7 @@ public class TestUtils {
         if (object instanceof Configuration configuration) {
             final var key = configKey(fieldName);
             if (key != null) {
-                configValues(configuration).put(key, fieldValue == null ? null : String.valueOf(fieldValue));
-                configResolved(configuration).remove(key);
+                configuration.override(key, fieldValue == null ? null : String.valueOf(fieldValue));
                 return;
             }
         }
@@ -189,14 +195,6 @@ public class TestUtils {
         return (Map<ConfigKey, String>) field.get(configuration);
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<ConfigKey, Object> configResolved(Configuration configuration)
-            throws NoSuchFieldException, IllegalAccessException {
-        final var field = Configuration.class.getDeclaredField("resolved");
-        field.setAccessible(true);
-        return (Map<ConfigKey, Object>) field.get(configuration);
-    }
-
     private static Object configValue(Configuration configuration, ConfigKey key, Class<?> fieldType)
             throws NoSuchFieldException, IllegalAccessException {
         final var raw = configValues(configuration).get(key);
@@ -207,7 +205,7 @@ public class TestUtils {
             return Integer.valueOf(raw.trim());
         }
         if (fieldType == long.class || fieldType == Long.class) {
-            return key.type() == ValueType.SIZE ? SizeParser.parse(raw) : Long.parseLong(raw.trim());
+            return key.type() == ValueType.SIZE ? configuration.sizeValue(key) : Long.parseLong(raw.trim());
         }
         if (fieldType == boolean.class || fieldType == Boolean.class) {
             return Boolean.valueOf(raw.trim());
@@ -329,6 +327,13 @@ public class TestUtils {
         getPrivateField(clientTracker, "socketClients", AtomicInteger.class).set(0);
     }
 
+    public static void resetMembership() throws NoSuchFieldException, IllegalAccessException {
+        final var membershipService = IocContainer.get(MembershipService.class);
+        setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
+        setPrivateField(membershipService, "lastSeen", new ConcurrentHashMap<>());
+        setPrivateField(membershipService, "self", null);
+    }
+
     public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {
         final var locker = IocContainer.get(ResourceLocking.class);
         final var locksType = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {
@@ -343,6 +348,12 @@ public class TestUtils {
             }
         }
         locks.clear();
+        try {
+            TestUtils.getPrivateStaticField(Class.forName("org.techhouse.concurrency.CollectionFences"), "fenced",
+                    Set.class).clear();
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     public static List<String> dirtyIndexCollections() {

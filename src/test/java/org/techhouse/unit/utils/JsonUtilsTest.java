@@ -341,8 +341,8 @@ public class JsonUtilsTest {
         JsonObject obj = new JsonObject();
         obj.addProperty("k", "v");
         final var hash = JsonUtils.hashElement(obj);
-        assertEquals(64, hash.length());
-        assertTrue(hash.matches("[0-9a-f]+"));
+        assertEquals(JsonUtils.HASH_KEY_LENGTH, hash.length());
+        assertTrue(hash.matches("[0-9a-v]+"));
         JsonObject strObj = new JsonObject();
         strObj.add("v", new JsonString("true"));
         JsonObject boolObj = new JsonObject();

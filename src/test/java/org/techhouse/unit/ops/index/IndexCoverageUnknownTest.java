@@ -19,6 +19,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.OutsideWrites;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.index.IndexEntryReader;
@@ -56,9 +57,9 @@ public class IndexCoverageUnknownTest {
     }
 
     private static void forgetTheLiveRowCount() throws Exception {
-        Files.setLastModifiedTime(
-                Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL, TestGlobals.COLL + "-pk.idx"),
-                FileTime.fromMillis(0L));
+        final var pkIndex = Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL, TestGlobals.COLL + "-pk.idx");
+        Files.setLastModifiedTime(pkIndex, FileTime.fromMillis(0L));
+        OutsideWrites.madeTo(pkIndex.toFile());
     }
 
     @Test

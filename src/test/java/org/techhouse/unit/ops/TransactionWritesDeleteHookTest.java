@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
@@ -28,6 +29,7 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class TransactionWritesDeleteHookTest {
+    private static final long COLD_HOOK_TIMEOUT_MS = 30_000L;
     private static final Configuration configuration = Configuration.getInstance();
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -40,6 +42,7 @@ public class TransactionWritesDeleteHookTest {
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.setPrivateField(configuration, "triggersEnabled", true);
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
+        TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs", COLD_HOOK_TIMEOUT_MS);
         BeforeHookTestSupport.installHook("guard", "allow", "export default (d) => {};", EventType.DELETED);
         client = BeforeHookTestSupport.newClient();
     }
@@ -50,6 +53,8 @@ public class TransactionWritesDeleteHookTest {
         clientTracker.removeById(client);
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
+        TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs",
+                ConfigKey.BEFORE_HOOK_TIMEOUT_MS.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

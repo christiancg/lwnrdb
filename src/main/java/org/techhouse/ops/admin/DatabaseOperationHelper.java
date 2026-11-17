@@ -37,7 +37,8 @@ public final class DatabaseOperationHelper {
     private static final Logger logger = Logger.logFor(DatabaseOperationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
-    private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
@@ -185,8 +186,9 @@ public final class DatabaseOperationHelper {
             if (dbEntry == null) {
                 return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
             }
-            return locks.withRetiringCollectionLocks(dbName, dbEntry.getCollections(), remainingUntil(deadline),
-                    () -> deleteDatabaseUnderLocks(dbName, grantRewrite));
+            final var collNames = dbEntry.getCollections();
+            return locks.withRetiringCollectionLocks(dbName, collNames, remainingUntil(deadline),
+                    () -> deleteDatabaseUnderLocks(dbName, collNames, remainingUntil(deadline), grantRewrite));
         } catch (CollectionBusyException busy) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
         } catch (InterruptedException exception) {
@@ -196,16 +198,17 @@ public final class DatabaseOperationHelper {
             return dropFailed(exception);
         } finally {
             if (barrierHeld) {
+                locks.removeLock(dbName, Globals.COLLECTION_NAMES_LOCK);
                 locks.releaseDatabaseExclusive(dbName);
                 locks.removeDatabaseLock(dbName);
-                locks.removeLock(dbName, Globals.COLLECTION_NAMES_LOCK);
             }
         }
     }
 
-    private static OperationResponse deleteDatabaseUnderLocks(String dbName, GrantRewrite grantRewrite)
-            throws Exception {
-        if (!fs.deleteDatabase(dbName)) {
+    private static OperationResponse deleteDatabaseUnderLocks(String dbName, List<String> collNames,
+            long fieldLockBudget, GrantRewrite grantRewrite) throws Exception {
+        if (!FieldIndexDropFence.holdingFieldIndexLocks(dbName, collNames, fieldLockBudget,
+                () -> fs.deleteDatabase(dbName))) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
         }
         DroppedCollections.forgetDatabase(dbName);

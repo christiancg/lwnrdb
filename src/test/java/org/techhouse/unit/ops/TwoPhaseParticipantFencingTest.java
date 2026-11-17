@@ -274,7 +274,7 @@ public class TwoPhaseParticipantFencingTest {
             clientTracker.removeById(clientId);
         }
 
-        final var recorded = calls.indexOf("recordDeterministic");
+        final var recorded = calls.indexOf("saveTriggerRuns");
         assertTrue(recorded >= 0, "the prepared commit recorded no trigger run: " + calls);
         assertTrue(recorded < calls.lastIndexOf("writeTransactionRecords"),
                 "recorded after its ops were gone: " + calls);

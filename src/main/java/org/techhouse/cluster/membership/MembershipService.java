@@ -344,9 +344,9 @@ public class MembershipService {
         if (configured != null && !configured.isBlank()) {
             return configured.trim();
         }
-        final var path = fs.nodeIdFile();
+        final var path = fs.nodeIds().file();
         try {
-            final var content = fs.readNodeId();
+            final var content = fs.nodeIds().read();
             if (content != null) {
                 final var stored = content.trim();
                 if (isWellFormedNodeId(stored)) {
@@ -358,7 +358,7 @@ public class MembershipService {
                         + " or set nodeId in the configuration.");
             }
             final var generated = UUID.randomUUID().toString();
-            fs.writeNodeId(generated);
+            fs.nodeIds().write(generated);
             return generated;
         } catch (IOException e) {
             throw new IllegalStateException("Could not persist the node id at " + path + ". An ephemeral id changes"
@@ -368,14 +368,14 @@ public class MembershipService {
 
     public String persistedNodeId() {
         try {
-            final var content = fs.readNodeId();
+            final var content = fs.nodeIds().read();
             if (content == null) {
                 return null;
             }
             final var stored = content.trim();
             return isWellFormedNodeId(stored) ? stored : null;
         } catch (IOException e) {
-            logger.warning("Could not read the node id at " + fs.nodeIdFile() + ": " + e.getMessage());
+            logger.warning("Could not read the node id at " + fs.nodeIds().file() + ": " + e.getMessage());
             return null;
         }
     }

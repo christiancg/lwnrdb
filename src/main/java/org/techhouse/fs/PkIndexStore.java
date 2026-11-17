@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.UnaryOperator;
 import org.techhouse.config.Globals;
@@ -25,11 +26,17 @@ final class PkIndexStore {
     private static final long DELETED = -1L;
     private static final int VERSION_SCAN_CHUNK = 1 << 20;
     private static final Map<String, PkFileState> fileStates = new ConcurrentHashMap<>();
+    private static final Set<String> behindAVacuum = ConcurrentHashMap.newKeySet();
 
     private final FilePaths paths;
     private final WriteAheadLog wal;
+    private volatile RetiredCopies retiredCopies = RetiredCopies.NONE;
 
-    record PkFileState(long length, FileTime modified, long liveRows, long deadRows) {
+    record PkFileState(long length, FileTime modified, long liveRows, long deadRows, boolean written) {
+        boolean missing() {
+            return !written() && modified() == null;
+        }
+
         boolean needsCompaction() {
             return deadRows >= Math.max(liveRows, Globals.PK_LOG_MIN_DEAD_ROWS);
         }
@@ -48,6 +55,18 @@ final class PkIndexStore {
     PkIndexStore(FilePaths paths) {
         this.paths = paths;
         this.wal = new WriteAheadLog(paths);
+    }
+
+    WriteAheadLog wal() {
+        return wal;
+    }
+
+    RetiredCopies retiredCopies() {
+        return retiredCopies;
+    }
+
+    void onRetiredCopies(RetiredCopies listener) {
+        this.retiredCopies = listener;
     }
 
     record PkAppend(File file, PkFileState before, long offset) {
@@ -74,22 +93,23 @@ final class PkIndexStore {
     PkAppend prepareAppend(String dbName, String collName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collName);
         final var before = trustedOrHealed(dbName, collName, indexFile);
-        if (before == null || before.modified() == null) {
+        if (before == null || before.missing()) {
             OwnerOnly.ensureOwnerOnlyFile(indexFile.toPath());
             return new PkAppend(indexFile, before, indexFile.length());
         }
         return new PkAppend(indexFile, before, before.length());
     }
 
-    void appended(String dbName, String collName, PkAppend append, int rowCount, long liveDelta) {
+    void appended(String dbName, String collName, PkAppend append, long bytes, int rowCount, long liveDelta) {
         final var before = append.before();
         if (before == null || before.length() != append.offset()) {
             forget(append.file());
             return;
         }
-        final var after = remember(append.file(), before.liveRows() + liveDelta,
-                before.deadRows() + rowCount - liveDelta);
-        if (after != null && after.needsCompaction()) {
+        final var after = new PkFileState(append.offset() + bytes, null, before.liveRows() + liveDelta,
+                before.deadRows() + rowCount - liveDelta, true);
+        fileStates.put(append.file().getAbsolutePath(), after);
+        if (after.needsCompaction()) {
             compact(dbName, collName, append.file());
         }
     }
@@ -188,6 +208,7 @@ final class PkIndexStore {
             return Map.of();
         }
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        requireCurrent(dbName, collectionName, indexFile);
         final var readLock = FileLocks.lockRead(indexFile);
         try (var in = Files.newInputStream(indexFile.toPath())) {
             return PkPointScan.rowsFor(in, indexFile, dbName, collectionName, ids);
@@ -273,8 +294,25 @@ final class PkIndexStore {
         }
     }
 
+    void markBehindAVacuum(String dbName, String collectionName) {
+        behindAVacuum.add(paths.pkIndexFile(dbName, collectionName).getAbsolutePath());
+    }
+
+    boolean clearBehindAVacuum(String dbName, String collectionName) {
+        return behindAVacuum.remove(paths.pkIndexFile(dbName, collectionName).getAbsolutePath());
+    }
+
+    private static void requireCurrent(String dbName, String collectionName, File indexFile) throws IOException {
+        if (!behindAVacuum.isEmpty() && behindAVacuum.contains(indexFile.getAbsolutePath())) {
+            throw new IOException("The PK index of " + dbName + "|" + collectionName + " is behind a page vacuum whose"
+                    + " moved rows could not be recorded, so its positions are stale; the collection's next use, or a"
+                    + " restart, re-derives them from the vacuum's open intent");
+        }
+    }
+
     private Folded readHealed(String dbName, String collectionName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        requireCurrent(dbName, collectionName, indexFile);
         if (!indexFile.exists()) {
             return new Folded(new ArrayList<>(), 0, false, false);
         }
@@ -301,6 +339,9 @@ final class PkIndexStore {
                 writeRows(dbName, collectionName, indexFile, refolded.live());
             }
             return refolded;
+        } catch (RewriteOpenException deferred) {
+            logger.info("Left " + indexFile.getName() + " unhealed for now: " + deferred.getMessage());
+            return fold(dbName, collectionName, indexFile);
         } finally {
             writeLock.unlock();
         }
@@ -375,15 +416,18 @@ final class PkIndexStore {
     }
 
     private static PkFileState trusted(File indexFile) {
+        final var known = fileStates.get(indexFile.getAbsolutePath());
+        if (known != null && known.written()) {
+            return known;
+        }
         final BasicFileAttributes attributes;
         try {
             attributes = Files.readAttributes(indexFile.toPath(), BasicFileAttributes.class);
         } catch (NoSuchFileException e) {
-            return new PkFileState(0L, null, 0L, 0L);
+            return new PkFileState(0L, null, 0L, 0L, false);
         } catch (IOException e) {
             return null;
         }
-        final var known = fileStates.get(indexFile.getAbsolutePath());
         if (known == null || known.modified() == null) {
             return null;
         }
@@ -392,15 +436,13 @@ final class PkIndexStore {
                 : null;
     }
 
-    private static PkFileState remember(File indexFile, long liveRows, long deadRows) {
+    private static void remember(File indexFile, long liveRows, long deadRows) {
         try {
             final var attributes = Files.readAttributes(indexFile.toPath(), BasicFileAttributes.class);
-            final var state = new PkFileState(attributes.size(), attributes.lastModifiedTime(), liveRows, deadRows);
-            fileStates.put(indexFile.getAbsolutePath(), state);
-            return state;
+            fileStates.put(indexFile.getAbsolutePath(),
+                    new PkFileState(attributes.size(), attributes.lastModifiedTime(), liveRows, deadRows, false));
         } catch (IOException e) {
             forget(indexFile);
-            return null;
         }
     }
 
@@ -415,5 +457,6 @@ final class PkIndexStore {
     static void forgetUnder(File folder) {
         final var prefix = folder.getAbsolutePath() + File.separator;
         fileStates.keySet().removeIf(path -> path.startsWith(prefix));
+        behindAVacuum.removeIf(path -> path.startsWith(prefix));
     }
 }

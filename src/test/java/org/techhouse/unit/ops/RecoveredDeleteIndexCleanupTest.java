@@ -13,8 +13,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.bckg_ops.events.EntityEvent;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
@@ -24,6 +22,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
+import org.techhouse.ops.index.IndexRepairPass;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -85,12 +84,6 @@ public class RecoveredDeleteIndexCleanupTest {
                 .flatMap(entry -> entry.getIds().stream()).collect(Collectors.toSet());
     }
 
-    private List<EntityEvent> queuedUpdates() throws Exception {
-        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
-        return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast)
-                .filter(event -> event.getType() == EventType.UPDATED).toList();
-    }
-
     @Test
     public void test_a_recovered_delete_is_marked_pending_and_queued() throws Exception {
         save(KEPT);
@@ -101,12 +94,10 @@ public class RecoveredDeleteIndexCleanupTest {
 
         assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(GONE),
                 "an index-backed read must stop answering the deleted id before the worker removes it");
-        final var updates = queuedUpdates();
-        assertEquals(1, updates.size());
-        final var queued = updates.getFirst().getEntity();
-        assertEquals(GONE, queued.id());
-        assertEquals(queued.byteSize(), queued.previousByteSize(),
-                "the page rows were rebuilt from the page files, so the cleanup must not move them again");
+        final var repairs = QueuedRepairs.of(stubTaskManager);
+        assertEquals(1, repairs.size());
+        assertEquals(List.of(GONE), repairs.getFirst().getIds(),
+                "the page rows were rebuilt from the page files, so only index work is queued");
     }
 
     @Test
@@ -118,7 +109,7 @@ public class RecoveredDeleteIndexCleanupTest {
         final var row = deleteBehindTheIndexesBack(GONE);
         PageOccupancyReconciler.scheduleIndexCleanupFor(List.of(row));
 
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, GONE);
+        IndexRepairPass.run(QueuedRepairs.of(stubTaskManager).getFirst());
 
         assertEquals(Set.of(KEPT), indexedIds());
     }
@@ -130,7 +121,7 @@ public class RecoveredDeleteIndexCleanupTest {
 
         PageOccupancyReconciler.scheduleIndexCleanupFor(List.of(adminRow, pageRow));
 
-        assertTrue(queuedUpdates().isEmpty());
+        assertTrue(QueuedRepairs.of(stubTaskManager).isEmpty());
     }
 
     @Test
@@ -139,12 +130,12 @@ public class RecoveredDeleteIndexCleanupTest {
 
         PageOccupancyReconciler.scheduleIndexCleanupFor(List.of(row));
 
-        assertTrue(queuedUpdates().isEmpty());
+        assertTrue(QueuedRepairs.of(stubTaskManager).isEmpty());
         assertFalse(pendingIndexWrites.idsFor(TestGlobals.DB, "droppedcoll").contains(GONE));
     }
 
     @Test
-    public void test_two_deletes_in_one_collection_queue_two_events() throws Exception {
+    public void test_two_deletes_in_one_collection_queue_one_repair_pass() throws Exception {
         save(KEPT);
         save(GONE);
         final var first = deleteBehindTheIndexesBack(GONE);
@@ -152,6 +143,7 @@ public class RecoveredDeleteIndexCleanupTest {
 
         PageOccupancyReconciler.scheduleIndexCleanupFor(List.of(first, second));
 
-        assertEquals(Set.of(GONE, KEPT), Set.copyOf(queuedUpdates().stream().map(EntityEvent::getId).toList()));
+        assertEquals(1, QueuedRepairs.of(stubTaskManager).size());
+        assertEquals(Set.of(GONE, KEPT), Set.copyOf(QueuedRepairs.idsOf(stubTaskManager)));
     }
 }

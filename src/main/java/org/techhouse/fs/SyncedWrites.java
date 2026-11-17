@@ -3,6 +3,8 @@ package org.techhouse.fs;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
@@ -10,15 +12,47 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
 final class SyncedWrites {
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(SyncedWrites.class);
+    private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
     @SuppressWarnings("FieldMayBeFinal")
     private static volatile Forcer forcer = Forcer.DEVICE;
 
     private SyncedWrites() {
+    }
+
+    static void useForcer(Forcer replacement) {
+        forcer = replacement;
+    }
+
+    static void forceOrFail(FileChannel channel, Path path) throws IOException {
+        if (faultInjector.isEnabled() && faultInjector.failsAt(FaultPoint.FILE_FORCED, subjectOf(path))) {
+            forcer.forceFailed(path);
+            ForceFailures.failed(path);
+            ForceMetrics.failed();
+            throw new IOException("injected force failure of " + path);
+        }
+        final var startedAt = System.nanoTime();
+        try {
+            forcer.force(channel, path);
+        } catch (IOException | RuntimeException e) {
+            ForceFailures.failed(path);
+            ForceMetrics.failed();
+            throw e;
+        }
+        ForceMetrics.observe(System.nanoTime() - startedAt);
+    }
+
+    private static String subjectOf(Path path) {
+        final var name = String.valueOf(path.getFileName());
+        return Files.isDirectory(path) ? name + "/" : name;
     }
 
     static boolean enabled() {
@@ -27,14 +61,14 @@ final class SyncedWrites {
 
     static void content(FileChannel channel, Path file) throws IOException {
         if (enabled()) {
-            forcer.force(channel, file);
+            forceOrFail(channel, file);
         }
     }
 
     static void content(Path file) throws IOException {
         if (enabled()) {
             try (var channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
-                forcer.force(channel, file);
+                forceOrFail(channel, file);
             }
         }
     }
@@ -67,9 +101,21 @@ final class SyncedWrites {
     private static void forceCollecting(Path file, Queue<IOException> failures) {
         try {
             content(file);
+        } catch (NoSuchFileException e) {
+            if (!isFieldIndexLog(file)) {
+                failures.add(e);
+                return;
+            }
+            logger.info("Skipped forcing " + file + ": it was removed before its force, so none of its bytes are left"
+                    + " to make durable");
         } catch (IOException e) {
             failures.add(e);
         }
+    }
+
+    private static boolean isFieldIndexLog(Path file) {
+        final var name = file.getFileName();
+        return name != null && name.toString().endsWith(Globals.INDEX_LOG_FILE_EXTENSION);
     }
 
     static void entries(Path folder) throws IOException {
@@ -95,7 +141,7 @@ final class SyncedWrites {
 
     private static void forceFolder(Path folder) throws IOException {
         try (var channel = FileChannel.open(folder, StandardOpenOption.READ)) {
-            forcer.force(channel, folder);
+            forceOrFail(channel, folder);
         }
     }
 }

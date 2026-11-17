@@ -10,10 +10,8 @@ import java.util.Map;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
-import org.techhouse.log.Logger;
 
 final class FieldIndexStore {
-    private static final Logger logger = Logger.logFor(FieldIndexStore.class);
     private static final byte[] EMPTY_FILE = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
 
     private final FilePaths paths;
@@ -38,31 +36,81 @@ final class FieldIndexStore {
         writeEntries(paths.indexFile(dbName, collName, fieldName, kind.label()), entries);
     }
 
-    boolean appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
-            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors) throws IOException {
+    PendingFold appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors, int foldDivisor)
+            throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
         if (indexFile == null) {
-            return false;
+            return null;
         }
         final var logFile = FilePaths.logFileOf(indexFile);
         final var lock = FileLocks.lockWrite(indexFile);
         try {
-            if (survivors.isEmpty() || FieldIndexLog.append(indexFile, logFile, changes)) {
+            if (survivors.isEmpty()) {
                 replaceType(indexFile, logFile, survivors);
-                return true;
+                return null;
             }
-            return false;
+            final var outcome = FieldIndexLog.append(indexFile, logFile, changes, foldDivisor);
+            if (!outcome.due()) {
+                return null;
+            }
+            return PendingFold.ofSurvivors(dbName, collName, fieldName, typeLabel, indexFile, survivors,
+                    outcome.pastResidentCeiling());
         } finally {
             lock.unlock();
         }
     }
 
+    PendingFold appendIndexLogOnly(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, IndexTypeReader foldSource) throws IOException {
+        final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
+        if (indexFile == null) {
+            return null;
+        }
+        final var lock = FileLocks.lockWrite(indexFile);
+        try {
+            if (!FieldIndexLog
+                    .append(indexFile, FilePaths.logFileOf(indexFile), changes, Globals.REFUSED_INDEX_FOLD_DIVISOR)
+                    .due()) {
+                return null;
+            }
+            return PendingFold.ofSource(dbName, collName, fieldName, typeLabel, indexFile, foldSource);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    PendingFold.Outcome fold(PendingFold fold) throws IOException {
+        final var lock = FileLocks.lockWrite(fold.indexFile());
+        try {
+            if (!fold.stillCurrent()) {
+                return PendingFold.Outcome.SKIPPED;
+            }
+            final var entries = fold.entries();
+            replaceType(fold.indexFile(), fold.logFile(), entries);
+            return entries.isEmpty() ? PendingFold.Outcome.EMPTIED : PendingFold.Outcome.FOLDED;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    long stampOf(String dbName, String collName, String fieldName, String typeLabel) {
+        final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
+        return indexFile == null ? 0L : FieldIndexLog.stampOf(indexFile);
+    }
+
     static void replaceType(File indexFile, File logFile, List<? extends FieldIndexEntry<?>> entries)
             throws IOException {
-        PageTails.forget(logFile);
+        FieldIndexLog.replaced(indexFile);
         if (entries.isEmpty()) {
-            deleteIndexFile(indexFile);
-            deleteIndexFile(logFile);
+            if (couldNotDelete(indexFile)) {
+                FileLocks.rewriteFileAtomically(indexFile.toPath(), _ -> {
+                });
+            }
+            if (couldNotDelete(logFile)) {
+                throw new IOException("Could not delete the index log " + logFile.getName()
+                        + " of a type that no document holds any more");
+            }
             return;
         }
         FileLocks.rewriteFileAtomically(indexFile.toPath(), out -> {
@@ -85,7 +133,7 @@ final class FieldIndexStore {
             if (indexFiles != null) {
                 final var deleted = new ArrayList<Boolean>();
                 for (var index : indexFiles) {
-                    PageTails.forget(index);
+                    FieldIndexLog.replaced(baseOf(index));
                     deleted.add(index.delete());
                     FileLocks.evictIfUnused(index);
                 }
@@ -94,6 +142,16 @@ final class FieldIndexStore {
             }
         }
         return false;
+    }
+
+    private static File baseOf(File typeFile) {
+        final var name = typeFile.getName();
+        if (!name.endsWith(Globals.INDEX_LOG_FILE_EXTENSION)) {
+            return typeFile;
+        }
+        return new File(typeFile.getParentFile(),
+                name.substring(0, name.length() - Globals.INDEX_LOG_FILE_EXTENSION.length())
+                        + Globals.INDEX_FILE_EXTENSION);
     }
 
     private static boolean namesOneTypeOfThisField(String fileName, String prefix) {
@@ -122,7 +180,7 @@ final class FieldIndexStore {
                     out.write(EMPTY_FILE);
                 }
             });
-            PageTails.forget(FilePaths.logFileOf(indexFile));
+            FieldIndexLog.replaced(indexFile);
             if (Files.deleteIfExists(FilePaths.logFileOf(indexFile).toPath())) {
                 syncFolderOf(indexFile);
             }
@@ -133,16 +191,15 @@ final class FieldIndexStore {
         }
     }
 
-    private static void deleteIndexFile(File indexFile) {
-        if (!indexFile.exists()) {
-            return;
+    private static boolean couldNotDelete(File file) {
+        if (!file.exists()) {
+            return false;
         }
-        if (indexFile.delete()) {
-            syncFolderOf(indexFile);
-        } else {
-            logger.warning("Could not delete the now-empty index file " + indexFile.getName()
-                    + "; while it exists CONTAINS and NOT_IN decline this field's index until a REINDEX");
+        if (!file.delete()) {
+            return true;
         }
+        syncFolderOf(file);
+        return false;
     }
 
     private static void syncFolderOf(File file) {

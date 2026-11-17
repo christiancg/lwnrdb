@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -23,6 +24,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
@@ -110,6 +112,7 @@ public class MetadataDeleteFailureTest {
     }
 
     private void lock(String relativeFolder) throws Exception {
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has permission bits that deny its owner");
         lockedFolder = new File(TestUtils.getDbPath(fs), TestGlobals.DB + File.separator + relativeFolder);
         Files.setPosixFilePermissions(lockedFolder.toPath(), PosixFilePermissions.fromString("r-xr-xr-x"));
         assumeFalse(Files.isWritable(lockedFolder.toPath()), "a superuser ignores the permission bits");

@@ -2,6 +2,7 @@ package org.techhouse.unit.concurrency;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Map;
@@ -68,5 +69,17 @@ public class DropLockEvictionTest {
 
         assertFalse(lockMap().containsKey(namesKey), "the dropped database's collection-names lock is evicted");
         assertFalse(lockMap().containsKey(TestGlobals.DB));
+    }
+
+    @Test
+    public void test_drop_forgets_the_admin_pages_identifier() {
+        final var pagesColl = AdminPageEntry.pagesCollectionName(TestGlobals.DB, TestGlobals.COLL);
+        final var remembered = Cache.canonicalNames(Globals.ADMIN_PAGES_DB_NAME, pagesColl);
+
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL)).getStatus());
+
+        assertNotSame(remembered, Cache.canonicalNames(Globals.ADMIN_PAGES_DB_NAME, pagesColl),
+                "removing the page-row lock looks the identifier up again, so the drop forgets it afterwards");
     }
 }

@@ -39,6 +39,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.InFlightRequests;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -256,6 +257,18 @@ public class ShutdownCoordinatorTest {
 
         assertFalse(tickerRunningAtTriggerDrain.get(),
                 "a scheduled run firing during the trigger drain would enqueue into a draining executor");
+    }
+
+    @Test
+    public void test_the_write_stall_watchdog_stops_with_the_other_sweeps() throws Exception {
+        final var watchdog = new WriteStallWatchdog();
+        watchdog.start();
+        final var coordinator = coordinator();
+        TestUtils.setPrivateField(coordinator, "writeStallWatchdog", watchdog);
+
+        coordinator.shutdown(null, null);
+
+        assertFalse(watchdog.isRunning());
     }
 
     @Test

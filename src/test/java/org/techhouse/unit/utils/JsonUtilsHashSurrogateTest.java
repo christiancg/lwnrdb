@@ -3,6 +3,7 @@ package org.techhouse.unit.utils;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -48,7 +49,8 @@ public class JsonUtilsHashSurrogateTest {
     @Test
     public void test_a_surrogate_pair_keeps_its_canonical_spelling() {
         assertEquals("[\"\ud83d\ude00\"]", JsonUtils.canonicalize(arrayOf("\ud83d\ude00")));
-        assertEquals(JsonUtils.sha256("[\"\ud83d\ude00\"]"), JsonUtils.hashElement(arrayOf("\ud83d\ude00")));
+        assertEquals(JsonUtils.hashKeyOf(HexFormat.of().parseHex(JsonUtils.sha256("[\"\ud83d\ude00\"]"))),
+                JsonUtils.hashElement(arrayOf("\ud83d\ude00")));
     }
 
     @Test

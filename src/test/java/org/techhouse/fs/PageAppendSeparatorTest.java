@@ -50,6 +50,7 @@ public class PageAppendSeparatorTest {
         try (var raf = new RandomAccessFile(pageFile(), "rw")) {
             raf.setLength(raf.length() - Globals.NEWLINE.length());
         }
+        OutsideWrites.madeTo(pageFile());
     }
 
     private PkIndexEntry pkOf(String id) throws IOException {

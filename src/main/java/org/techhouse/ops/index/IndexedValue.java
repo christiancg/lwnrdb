@@ -3,6 +3,7 @@ package org.techhouse.ops.index;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNull;
@@ -22,7 +23,7 @@ public record IndexedValue(Class<?> type, IndexKind kind, String key, Object val
                 case JsonNumber number -> scalar(Number.class, number.doubleValue() + 0.0);
                 case JsonString string when string.isJsonCustom() -> {
                     final var custom = CustomTypeFactory.getCustomTypeInstance(string);
-                    yield scalar(custom.getClass(), custom);
+                    yield scalar(custom.getClass(), custom instanceof JsonVector vector ? vector.asIndexKey() : custom);
                 }
                 case JsonString string -> scalar(String.class, string.getValue());
                 case JsonBoolean bool -> scalar(Boolean.class, bool.getValue());
@@ -36,6 +37,17 @@ public record IndexedValue(Class<?> type, IndexKind kind, String key, Object val
             return hashed(IndexKind.ARRAY, JsonUtils.hashElement(element));
         }
         return null;
+    }
+
+    public static boolean holdsSameScalar(Object held, JsonBaseElement element) {
+        return switch (element) {
+            case JsonNumber number -> held instanceof Double value
+                    && Double.doubleToLongBits(value) == Double.doubleToLongBits(number.doubleValue() + 0.0);
+            case JsonString string when string.isJsonCustom() -> false;
+            case JsonString string -> held instanceof String value && value.equals(string.getValue());
+            case JsonBoolean bool -> held instanceof Boolean value && value.equals(bool.getValue());
+            case null, default -> false;
+        };
     }
 
     private static IndexedValue scalar(Class<?> type, Object value) {

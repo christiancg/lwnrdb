@@ -20,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.test.PlatformSupport;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
 public class SyncedWriteOrderTest {
@@ -38,7 +40,7 @@ public class SyncedWriteOrderTest {
 
     @BeforeEach
     public void setUp() throws Exception {
-        recorder = RecordingForcer.install(true);
+        recorder = RecordingForcer.install(PlatformSupport.directorySync());
         rf = new ReplacerFixture(tmp, DB, COLL);
         rf.fx.seed(0, "a", "b", "c");
         recorder.clear();
@@ -67,6 +69,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_insert_forces_the_marker_then_only_the_log() throws Exception {
         new IndexMarkers(rf.fx.paths).markDirty(DB, COLL);
         rf.appender.insert(rf.entry("d", "new-d", 0), ReplacerFixture.line("d", "new-d"));
@@ -75,6 +78,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_update_forces_only_the_log() throws Exception {
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
@@ -83,6 +87,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_delete_forces_only_the_log() throws Exception {
         rf.replacer.delete(rf.fx.indexed("b"));
 
@@ -91,6 +96,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_relocation_forces_only_the_log() throws Exception {
         rf.replace("b", "moved-b", 1, null);
 
@@ -98,6 +104,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_bulk_insert_forces_only_the_log_once() throws Exception {
         final var entries = new ArrayList<>(List.of(rf.entry("x", "x", 0), rf.entry("y", "y", 1)));
 
@@ -108,6 +115,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_bulk_update_forces_only_the_log_once() throws Exception {
         rf.bulk(List.of(rf.indexed("a", "bulk-a"), rf.indexed("c", "bulk-c")));
 
@@ -125,6 +133,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_forces_the_touched_pages_and_pk_before_it_rewrites_the_log() throws Exception {
         rf.replace("b", "moved-b", 1, null);
         recorder.clear();
@@ -137,6 +146,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_of_an_empty_log_forces_nothing() throws Exception {
         final var log = new WriteAheadLog(rf.fx.paths);
         log.checkpoint(DB, COLL);
@@ -148,6 +158,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_vacuum_forces_only_its_page_before_the_barrier() throws Exception {
         rf.fx.seed(1, "x");
         rf.replace("x", "new-x", 1, PagePlacement.APPEND);
@@ -156,14 +167,18 @@ public class SyncedWriteOrderTest {
 
         rf.vacuum.vacuumIfNeeded(DB, COLL, 0, 10, PagePlacement.VACUUM_THEN_APPEND, null);
 
-        assertEquals(List.of(PAGE, WAL, INTENTS, COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, WAL),
-                filesOnly(recorder.forcedNames()),
-                "the page is forced before REWRITE_BEGIN, the temp file before the rename, and the log once more"
-                        + " for REWRITE_END and the moved rows; page 1, pk.idx and a log rewrite are never forced");
-        assertInOrder(recorder.forcedNames(), COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, COLL, WAL);
+        final var files = filesOnly(recorder.forcedNames());
+        assertEquals(Set.of(PAGE, INTENTS, COLL + "-0" + Globals.VACUUM_FILE_EXTENSION),
+                Set.copyOf(files.subList(0, 3)),
+                "the page, the intent and the temp file are forced together before REWRITE_BEGIN");
+        assertEquals(List.of(WAL, WAL), files.subList(3, files.size()),
+                "the log is forced for REWRITE_BEGIN and once more for REWRITE_END and the moved rows; page 1,"
+                        + " pk.idx and a log rewrite are never forced");
+        assertInOrder(recorder.forcedNames(), COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, WAL, COLL, WAL);
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_group_forces_its_files_at_the_same_time() throws Exception {
         final var inFlight = new CountDownLatch(2);
         recorder.close();
@@ -189,6 +204,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_atomic_rewrite_forces_tmp_before_the_move_and_the_folder_after() throws Exception {
         final var schema = new File(rf.fx.paths.collectionFolder(DB, COLL), COLL + "-schema.json");
         MetadataFileStore.write(schema, "{}");
@@ -200,16 +216,19 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_vacuum_forces_the_vacuum_file_before_the_rename() throws Exception {
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
         recorder.clear();
 
         rf.vacuum.vacuumIfNeeded(DB, COLL, 0, 10, PagePlacement.VACUUM_THEN_APPEND, null);
 
-        assertInOrder(recorder.forcedNames(), INTENTS, COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, COLL);
+        assertInOrder(recorder.forcedNames(), INTENTS, COLL);
+        assertInOrder(recorder.forcedNames(), COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, COLL);
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_tombstone_append_is_forced() throws Exception {
         new TombstoneStore(rf.fx.paths).append(DB, COLL, "gone", 7L);
 
@@ -218,6 +237,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_deferred_tombstone_batch_is_forced_once_before_await_returns() throws Exception {
         final var pending = new TombstoneStore(rf.fx.paths).appendAllDeferred(DB, COLL, List.of("x", "y", "z"),
                 List.of(5L, 6L, 7L));
@@ -230,6 +250,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_an_empty_deferred_tombstone_batch_writes_and_forces_nothing() throws Exception {
         new TombstoneStore(rf.fx.paths).appendAllDeferred(DB, COLL, List.of(), List.of()).await();
 
@@ -238,6 +259,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_index_log_append_is_forced_before_the_marker_clear() throws Exception {
         final var markers = new IndexMarkers(rf.fx.paths);
         markers.markDirty(DB, COLL);
@@ -254,6 +276,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_intent_end_and_marker_clear_are_not_forced() throws Exception {
         final var markers = new IndexMarkers(rf.fx.paths);
         markers.markDirty(DB, COLL);
@@ -268,6 +291,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_drop_collection_forces_the_database_folder() {
         final var collectionFolder = rf.fx.paths.collectionFolder(DB, COLL);
 
@@ -278,6 +302,7 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_log_that_cannot_be_forced_fails_the_write_before_any_file_is_touched() throws Exception {
         final var pageBefore = Files.readAllBytes(rf.fx.page(0).toPath());
         final var pkBefore = Files.readAllBytes(rf.fx.paths.pkIndexFile(DB, COLL).toPath());

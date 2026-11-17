@@ -6,8 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +36,9 @@ public class AdminRecordNamesLockTest extends AdminRecordTestBase {
             Globals.COLLECTION_NAMES_LOCK);
     private static final String DATABASE_NAMES = Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME,
             Globals.DATABASE_NAMES_LOCK);
+    private static final String FIELD = "tag";
+    private static final String FIELD_INDEX = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)
+            + Globals.COLL_IDENTIFIER_SEPARATOR + FIELD;
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private long origTimeout;
 
@@ -199,5 +204,49 @@ public class AdminRecordNamesLockTest extends AdminRecordTestBase {
 
         assertTrue(AdminRecordMerge.apply(List.of(record), true).complete());
         assertTrue(cache.getAdminDbEntry(TestGlobals.DB).isOwner("alice"));
+    }
+
+    private void indexTheCollection() {
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(new HashSet<>(Set.of(FIELD)));
+    }
+
+    @Test
+    public void test_a_collection_quarantine_waits_for_its_field_index_locks() throws Exception {
+        indexTheCollection();
+        final var dropped = tombstone(AdminRecordKey.collection(TestGlobals.DB, TestGlobals.COLL), clock.next());
+        try (var _ = holding(FIELD_INDEX)) {
+            assertFalse(AdminRecordMerge.apply(List.of(dropped), false).complete());
+            assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+        }
+
+        assertTrue(AdminRecordMerge.apply(List.of(dropped), false).complete());
+        assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    @Test
+    public void test_a_stale_incarnation_quarantine_waits_for_its_field_index_locks() throws Exception {
+        indexTheCollection();
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIncarnation(clock.next());
+        final var recreated = collection(TestGlobals.DB, TestGlobals.COLL, clock.next(), clock.next());
+        try (var _ = holding(FIELD_INDEX)) {
+            assertFalse(AdminRecordMerge.apply(List.of(recreated), true).complete());
+            assertTrue(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).getIndexes().contains(FIELD));
+        }
+
+        assertTrue(AdminRecordMerge.apply(List.of(recreated), true).complete());
+        assertEquals(recreated.version(), liveVersion(recreated.key()));
+    }
+
+    @Test
+    public void test_a_database_quarantine_waits_for_its_field_index_locks() throws Exception {
+        indexTheCollection();
+        final var dropped = tombstone(AdminRecordKey.database(TestGlobals.DB), clock.next());
+        try (var _ = holding(FIELD_INDEX)) {
+            assertFalse(AdminRecordMerge.apply(List.of(dropped), false).complete());
+            assertNotNull(cache.getAdminDbEntry(TestGlobals.DB));
+        }
+
+        assertTrue(AdminRecordMerge.apply(List.of(dropped), false).complete());
+        assertNull(cache.getAdminDbEntry(TestGlobals.DB));
     }
 }

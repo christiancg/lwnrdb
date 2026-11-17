@@ -2,13 +2,14 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.techhouse.analyze.ReadObserver;
+import org.techhouse.bckg_ops.events.IndexPriors;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -16,13 +17,17 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ex.CollectionBusyException;
+import org.techhouse.ex.IndexLockBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.index.FieldIndexBatch;
+import org.techhouse.ops.index.CanonicalIds;
+import org.techhouse.ops.index.DeferredFold;
+import org.techhouse.ops.index.FieldIndexFolds;
+import org.techhouse.ops.index.FieldMaintenance;
 import org.techhouse.ops.index.IndexBuild;
 import org.techhouse.ops.index.IndexEntryReader;
 import org.techhouse.ops.index.IndexValueCodec;
-import org.techhouse.utils.JsonUtils;
+import org.techhouse.ops.index.MaintainedIndexes;
 
 public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -64,8 +69,13 @@ public class IndexHelper {
     }
 
     public static void createIndex(String dbName, String collName, String fieldName) throws InterruptedException {
+        createIndexes(dbName, collName, List.of(fieldName));
+    }
+
+    public static void createIndexes(String dbName, String collName, List<String> fieldNames)
+            throws InterruptedException {
         try {
-            IndexBuild.buildAll(dbName, collName, List.of(fieldName));
+            IndexBuild.buildAll(dbName, collName, fieldNames);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -79,11 +89,6 @@ public class IndexHelper {
             cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
             rl.releaseIndex(dbName, collName, fieldName);
         }
-    }
-
-    private static List<String> maintainedIndexes(String dbName, String collName) {
-        return cache.getIndexesForCollection(dbName, collName).stream()
-                .filter(fieldName -> !fs.indexMarkers().isMarked(dbName, collName, fieldName)).toList();
     }
 
     private static void lockCollectionForMaintenance(String dbName, String collName, long budget)
@@ -100,49 +105,45 @@ public class IndexHelper {
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids, long lockBudgetMs)
             throws IOException, InterruptedException {
-        if (ids.isEmpty() || maintainedIndexes(dbName, collName).isEmpty()) {
+        bulkUpdateIndexes(dbName, collName, ids, lockBudgetMs, IndexPriors.NONE);
+    }
+
+    public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids, long lockBudgetMs,
+            IndexPriors priors) throws IOException, InterruptedException {
+        if (ids.isEmpty() || MaintainedIndexes.none(dbName, collName)) {
             return;
         }
+        final var folds = new ArrayList<DeferredFold>(0);
+        IndexLockBusyException indexBusy = null;
         lockCollectionForMaintenance(dbName, collName, lockBudgetMs);
         try {
-            final var existingIndexes = maintainedIndexes(dbName, collName);
+            final var existingIndexes = MaintainedIndexes.of(dbName, collName);
             if (existingIndexes.isEmpty()) {
                 return;
             }
             final var byId = new HashMap<String, DbEntry>();
-            for (var doc : cache.getEntriesByIds(dbName, collName, new HashSet<>(ids))) {
+            for (var doc : cache.getEntriesByIds(dbName, collName,
+                    ids.size() == 1 ? Set.of(ids.getFirst()) : new HashSet<>(ids))) {
                 byId.put(doc.get_id(), doc);
             }
+            final var canonicalIds = new CanonicalIds(dbName, collName);
             for (var fieldName : existingIndexes) {
-                maintainField(dbName, collName, fieldName, ids, byId);
+                folds.addAll(FieldMaintenance.maintain(dbName, collName, fieldName, ids, byId,
+                        priors.forField(fieldName), canonicalIds));
             }
+        } catch (IndexLockBusyException busy) {
+            indexBusy = busy;
         } finally {
             rl.releaseRead(dbName, collName);
+        }
+        FieldIndexFolds.runAfterUnlock(folds);
+        if (indexBusy != null) {
+            throw indexBusy;
         }
     }
 
     public static void updateIndexes(String dbName, String collName, String id)
             throws IOException, InterruptedException {
         bulkUpdateIndexes(dbName, collName, Collections.singletonList(id));
-    }
-
-    private static void maintainField(String dbName, String collName, String fieldName, List<String> ids,
-            Map<String, DbEntry> byId) throws IOException, InterruptedException {
-        rl.lockIndex(dbName, collName, fieldName);
-        var flushed = false;
-        try {
-            final var batch = FieldIndexBatch.open(dbName, collName, fieldName, ids);
-            for (var id : ids) {
-                final var doc = byId.get(id);
-                batch.apply(id, doc == null ? null : JsonUtils.getFromPath(doc.getData(), fieldName));
-            }
-            batch.flush();
-            flushed = true;
-        } finally {
-            if (!flushed) {
-                cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-            }
-            rl.releaseIndex(dbName, collName, fieldName);
-        }
     }
 }

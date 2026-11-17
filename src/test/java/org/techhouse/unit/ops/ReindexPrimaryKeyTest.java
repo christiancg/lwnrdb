@@ -25,7 +25,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -42,12 +41,12 @@ import org.techhouse.fs.IntentLogs;
 import org.techhouse.fs.StaleWriteIntent;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
-import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.AdminPageHelper;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
 import org.techhouse.ops.index.IndexOperationHelper;
+import org.techhouse.ops.index.IndexRepairPass;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -151,9 +150,7 @@ public class ReindexPrimaryKeyTest {
     }
 
     private List<String> queuedIds() throws Exception {
-        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
-        return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast).map(EntityEvent::getId)
-                .toList();
+        return QueuedRepairs.idsOf(stubTaskManager);
     }
 
     private List<String> idsTaggedLikeB() {
@@ -227,7 +224,7 @@ public class ReindexPrimaryKeyTest {
         assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("b"));
         assertEquals(List.of("b"), queuedIds());
         assertEquals(List.of("b"), idsTaggedLikeB(), "the pending overlay answers before the worker runs");
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "b");
+        IndexRepairPass.run(QueuedRepairs.of(stubTaskManager).getFirst());
         assertEquals(Set.of("a", "b", "c"), tagIndexIds());
         assertEquals(OperationStatus.OK, find("b"));
     }
@@ -249,7 +246,7 @@ public class ReindexPrimaryKeyTest {
 
         assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("ghost"));
         assertEquals(List.of("ghost"), queuedIds());
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "ghost");
+        IndexRepairPass.run(QueuedRepairs.of(stubTaskManager).getFirst());
         assertEquals(Set.of("a", "b"), tagIndexIds());
     }
 

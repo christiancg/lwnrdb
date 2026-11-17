@@ -37,7 +37,7 @@ public final class AuthorizationChecker {
     private AuthorizationChecker() {
     }
 
-    private static boolean isAdminOnly(OperationType type) {
+    public static boolean isAdminOnly(OperationType type) {
         return ADMIN_ONLY_OPERATIONS.contains(type);
     }
 
@@ -230,7 +230,7 @@ public final class AuthorizationChecker {
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
         return switch (type) {
             case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, GET_SCHEMA, LISTEN, LIST_PROCEDURES, LIST_TRIGGERS,
-                    LIST_SCHEDULES ->
+                    LIST_SCHEDULES, START_SNAPSHOT, READ_SNAPSHOT, RELEASE_SNAPSHOT ->
                 PermissionLevel.READ;
             default -> PermissionLevel.READ_WRITE;
         };

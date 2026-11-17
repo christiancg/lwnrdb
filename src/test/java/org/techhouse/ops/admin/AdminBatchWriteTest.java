@@ -24,6 +24,8 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.test.PlatformSupport;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -67,7 +69,7 @@ public class AdminBatchWriteTest {
     @BeforeEach
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
-        recorder = RecordingForcer.install(true);
+        recorder = RecordingForcer.install(PlatformSupport.directorySync());
     }
 
     @AfterEach
@@ -105,6 +107,7 @@ public class AdminBatchWriteTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_each_chunk_is_one_write_ahead_log_record() throws Exception {
         AdminBatchWrite.write(COLL, rows, List.of(entry("warm", 0, 10)), lines::get, List.of());
         final var entries = List.of(entry("tx", 0, LARGE_PAYLOAD_CHARS), entry("tx", 1, LARGE_PAYLOAD_CHARS),
@@ -119,6 +122,44 @@ public class AdminBatchWriteTest {
     }
 
     @Test
+    @RequiresDirectorySync
+    public void test_a_rewrite_spanning_records_never_deletes_what_an_earlier_record_reinserted() throws Exception {
+        final var original = List.of(entry("tx", 0, 10), entry("tx", 1, 10), entry("tx", 2, 10));
+        AdminBatchWrite.writeInChunks(COLL, rows, original, lines::get, List.of());
+        final var rewrite = List.of(entry("tx", 0, LARGE_PAYLOAD_CHARS), entry("tx", 1, LARGE_PAYLOAD_CHARS),
+                entry("tx", 2, LARGE_PAYLOAD_CHARS));
+        final var replaced = original.stream().map(AdminTransactionEntry::get_id).toList();
+        final var before = walForces();
+
+        AdminBatchWrite.writeInChunks(COLL, rows, rewrite, lines::get, replaced);
+
+        assertEquals(2, walForces() - before);
+        assertEquals(Set.copyOf(replaced), rows.published.keySet());
+        for (final var entry : rewrite) {
+            assertEquals(lines.get(entry).length, rows.published.get(entry.get_id()).getLength());
+            assertEquals(entry.get_id(), fs.getById(rows.published.get(entry.get_id())).get_id());
+        }
+    }
+
+    @Test
+    @RequiresDirectorySync
+    public void test_a_rewrite_spanning_records_still_deletes_the_rows_it_does_not_reinsert() throws Exception {
+        final var original = List.of(entry("tx", 0, 10), entry("tx", 1, 10), entry("tx", 2, 10));
+        AdminBatchWrite.writeInChunks(COLL, rows, original, lines::get, List.of());
+        final var rewrite = List.of(entry("tx", 0, LARGE_PAYLOAD_CHARS), entry("tx", 1, LARGE_PAYLOAD_CHARS),
+                entry("tx", 3, LARGE_PAYLOAD_CHARS));
+        final var replaced = original.stream().map(AdminTransactionEntry::get_id).toList();
+        final var before = walForces();
+
+        AdminBatchWrite.writeInChunks(COLL, rows, rewrite, lines::get, replaced);
+
+        assertEquals(2, walForces() - before);
+        assertEquals(Set.of(rewrite.get(0).get_id(), rewrite.get(1).get_id(), rewrite.get(2).get_id()),
+                rows.published.keySet());
+    }
+
+    @Test
+    @RequiresDirectorySync
     public void test_rows_are_published_only_after_their_record_landed() throws Exception {
         final var first = entry("tx", 0, 10);
         AdminBatchWrite.write(COLL, rows, List.of(first), lines::get, List.of());

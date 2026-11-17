@@ -39,7 +39,8 @@ public final class AdminOperationHelper {
 
     private AdminOperationHelper() {
     }
-    private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -49,13 +50,11 @@ public final class AdminOperationHelper {
 
     private static final AdminRecordStore<AdminTransactionEntry> TRANSACTION_OPS = new AdminRecordStore<>(
             Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, "transaction op", cache::getPkIndexTransaction,
-            cache::removePkIndexTransaction, AdminTransactionEntry::fromJsonObject,
-            (_, collName, type, entries) -> applyAdminPageDelta(collName, type, entries));
+            AdminTransactionEntry::fromJsonObject);
 
     private static final AdminRecordStore<AdminTriggerRunEntry> TRIGGER_RUNS = new AdminRecordStore<>(
             Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, "trigger run", cache::getPkIndexTriggerRun,
-            cache::removePkIndexTriggerRun, AdminTriggerRunEntry::fromJsonObject,
-            (_, collName, type, entries) -> applyAdminPageDelta(collName, type, entries));
+            AdminTriggerRunEntry::fromJsonObject);
 
     public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<EntityRef> inserted,
             long incarnation) throws InterruptedException, IOException {
@@ -98,8 +97,8 @@ public final class AdminOperationHelper {
         final var encodedLine = entry.encodeLine();
         if (existingPk != null) {
             entry.setPage(existingPk.getPage());
-            final var updatedPk = fs.updateFromCollection(entry, existingPk, encodedLine,
-                    AdminResidentRows.of(collName));
+            final var updatedPk = fs.updateFromCollection(entry, existingPk, encodedLine, null,
+                    AdminResidentRows.of(collName), cache.pageOccupancy(Globals.ADMIN_DB_NAME, collName));
             applyAdminPageDelta(collName, EventType.UPDATED, entry);
             return updatedPk;
         }
@@ -387,6 +386,7 @@ public final class AdminOperationHelper {
         } finally {
             releaseAdmin(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         }
+        OutcomeMarkers.written(List.of(entry));
     }
 
     public static List<AdminTransactionEntry> readTransactionOps(List<String> opIds)
@@ -398,9 +398,29 @@ public final class AdminOperationHelper {
         writeTransactionRecords(List.of(), opIds);
     }
 
+    public static void applyDeferredTransactionRecords(long timeoutMillis) {
+        final var collName = Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME;
+        try {
+            if (!locks.tryLockWrite(Globals.ADMIN_DB_NAME, collName, timeoutMillis)) {
+                return;
+            }
+            try {
+                fs.applyDeferredWrites(Globals.ADMIN_DB_NAME, collName);
+            } finally {
+                releaseAdmin(collName);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            logger.warning("Could not apply the logged transaction records an earlier write could not; retrying"
+                    + " later: " + e.getMessage());
+        }
+    }
+
     public static void writeTransactionRecords(List<AdminTransactionEntry> inserts, List<String> deleteIds)
             throws IOException, InterruptedException {
         TransactionRecords.write(inserts, deleteIds);
+        OutcomeMarkers.written(inserts);
     }
 
     public static void saveTriggerRun(AdminTriggerRunEntry entry) throws IOException, InterruptedException {
@@ -409,13 +429,19 @@ public final class AdminOperationHelper {
             final var savedPk = writeAdminEntry(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, entry,
                     cache.getPkIndexTriggerRun(entry.get_id()));
             cache.putPkIndexTriggerRun(savedPk);
+            TriggerRunIndex.learn(entry, savedPk);
         } finally {
             releaseAdmin(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         }
     }
 
     public static void saveTriggerRuns(List<AdminTriggerRunEntry> entries) throws IOException, InterruptedException {
-        TriggerRunRecords.insert(entries);
+        saveTriggerRuns(entries, List.of());
+    }
+
+    public static void saveTriggerRuns(List<AdminTriggerRunEntry> entries, List<String> replacedRecordIds)
+            throws IOException, InterruptedException {
+        TriggerRunRecords.write(entries, replacedRecordIds);
     }
 
     public static List<AdminTriggerRunEntry> readTriggerRuns(List<String> recordIds)
@@ -424,7 +450,7 @@ public final class AdminOperationHelper {
     }
 
     public static void deleteTriggerRuns(List<String> recordIds) throws IOException, InterruptedException {
-        TRIGGER_RUNS.delete(recordIds);
+        TriggerRunRecords.delete(recordIds);
     }
 
     public static void deleteUserEntry(String username) throws IOException, InterruptedException {

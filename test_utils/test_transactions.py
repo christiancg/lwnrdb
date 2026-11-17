@@ -1,6 +1,6 @@
+import json
 import os
 import socket
-import json
 import sys
 import tempfile
 import time
@@ -18,6 +18,7 @@ ADMIN_PASSWORD = bu.PASSWORD
 DB = "txn_test_db"
 COLL = "orders"
 JOIN_COLL = "order_configs"
+PURGE_COLL = "purges"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -131,6 +132,40 @@ def test_save_reports_whether_it_inserted(c):
     check_status("COMMIT_TRANSACTION again", commit_txn(c), "OK")
 
 
+def insert(c, obj, coll=COLL, db=DB) -> dict:
+    return c.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "failOnUpdate": True, "object": obj})
+
+
+def test_insert_inside_a_transaction(c):
+    section("SAVE with failOnUpdate inside a transaction")
+    coll = "insert_only"
+    check_status("create the collection",
+                 c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("seed a committed document", save(c, {"_id": "kept", "total": 1}, coll=coll), "OK")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_code("an insert of a committed id -> 409-18", insert(c, {"_id": "kept", "total": 2}, coll=coll),
+               "ERROR", "409-18")
+    check_status("an insert of a new id is buffered", insert(c, {"_id": "fresh", "total": 1}, coll=coll), "OK")
+    check_code("a second insert of the id the transaction buffered -> 409-18",
+               insert(c, {"_id": "fresh", "total": 2}, coll=coll), "ERROR", "409-18")
+    check_status("the transaction is still usable and commits", commit_txn(c), "OK")
+    check_field("the committed document keeps its body", find_by_id(c, "kept", coll=coll), "object.total", 1)
+    check_field("the buffered insert committed its first body", find_by_id(c, "fresh", coll=coll), "object.total", 1)
+
+    check_status("START_TRANSACTION again", start_txn(c), "OK")
+    check_status("buffered DELETE of a committed id", delete(c, "kept", coll=coll), "OK")
+    check_status("an insert after the transaction deleted the id is accepted",
+                 insert(c, {"_id": "kept", "total": 9}, coll=coll), "OK")
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+    check_field("the re-inserted document is stored", find_by_id(c, "kept", coll=coll), "object.total", 9)
+
+    check_status("START_TRANSACTION for a rollback", start_txn(c), "OK")
+    check_status("an insert of a new id", insert(c, {"_id": "rolled", "total": 1}, coll=coll), "OK")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+    check_code("the rolled back insert left nothing", find_by_id(c, "rolled", coll=coll), "NOT_FOUND", "404-2")
+
+
 def test_rollback_discards(c):
     section("Rollback discards buffered writes")
 
@@ -229,6 +264,109 @@ def test_buffered_delete_reads_as_not_found(c):
         check_status("rolled-back delete leaves the document in place", find_by_id(oc, "del1"), "OK")
 
 
+def delete_where(c, condition, coll=PURGE_COLL, db=DB) -> dict:
+    return c.send({"type": "DELETE", "databaseName": db, "collectionName": coll, "condition": condition})
+
+
+def kind_is(kind: str) -> dict:
+    return {"fieldOperatorType": "EQUALS", "field": "kind", "value": kind}
+
+
+def test_delete_by_condition_inside_a_transaction(c):
+    section("DELETE with a condition inside a transaction")
+
+    check_status("CREATE_COLLECTION purges", c.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                                                     "collectionName": PURGE_COLL}), "OK")
+    check_status("seed four stale and one fresh document", bulk_save(
+        c, [{"_id": f"p{i}", "kind": "stale" if i < 4 else "fresh"} for i in range(5)], coll=PURGE_COLL), "OK")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("buffer a fifth stale document", save(c, {"_id": "p-buffered", "kind": "stale"}, coll=PURGE_COLL),
+                 "OK")
+    check_status("buffer a delete of p0", delete(c, "p0", coll=PURGE_COLL), "OK")
+    r = delete_where(c, kind_is("stale"))
+    check_field("the condition sees the buffered save and not the buffered delete", r, "deletedCount", 4)
+    check_status("the matches read as gone inside the transaction", find_by_id(c, "p-buffered", coll=PURGE_COLL),
+                 "NOT_FOUND")
+    with authed_conn() as oc:
+        check_status("another client's dirty read still sees p1 before the commit", oc.send(
+            {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": PURGE_COLL, "_id": "p1", "dirtyRead": True}),
+                     "OK")
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as oc:
+        remaining = result_ids(aggregate(oc, coll=PURGE_COLL))
+        check("only the fresh document survives the commit", remaining == ["p4"], f"remaining={remaining}")
+
+
+def test_a_rolled_back_delete_by_condition_keeps_everything(c):
+    section("A rolled-back DELETE with a condition deletes nothing")
+
+    check_status("seed two documents", bulk_save(
+        c, [{"_id": "r1", "kind": "doomed"}, {"_id": "r2", "kind": "doomed"}], coll=PURGE_COLL), "OK")
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_field("the condition matches both", delete_where(c, kind_is("doomed")), "deletedCount", 2)
+    check_field("a condition matching nothing answers 0", delete_where(c, kind_is("none")), "deletedCount", 0)
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    with authed_conn() as oc:
+        check_status("r1 survives the rollback", find_by_id(oc, "r1", coll=PURGE_COLL), "OK")
+        check_status("r2 survives the rollback", find_by_id(oc, "r2", coll=PURGE_COLL), "OK")
+
+
+def save_where(c, condition, patch, coll=PURGE_COLL, db=DB) -> dict:
+    return c.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "condition": condition,
+                   "object": patch})
+
+
+def test_update_by_condition_inside_a_transaction(c):
+    section("SAVE with a condition inside a transaction")
+
+    check_status("seed three pending and one done document", bulk_save(
+        c, [{"_id": f"t{i}", "kind": "pending" if i < 3 else "done", "n": i} for i in range(4)], coll=PURGE_COLL),
+        "OK")
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("buffer a fourth pending document", save(c, {"_id": "t-buffered", "kind": "pending", "n": 9},
+                                                         coll=PURGE_COLL), "OK")
+    check_status("buffer a delete of t0", delete(c, "t0", coll=PURGE_COLL), "OK")
+    r = save_where(c, kind_is("pending"), {"kind": "claimed"})
+    check_field("the condition sees the buffered save and not the buffered delete", r, "updatedCount", 3)
+    inside = find_by_id(c, "t-buffered", coll=PURGE_COLL).get("object") or {}
+    check("the buffered document reads as claimed inside the transaction", inside.get("kind") == "claimed",
+          f"got {inside}")
+    with authed_conn() as oc:
+        outside = oc.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": PURGE_COLL, "_id": "t1",
+                           "dirtyRead": True}).get("object") or {}
+        check("another client's dirty read still sees t1 pending before the commit",
+              outside.get("kind") == "pending", f"got {outside}")
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as oc:
+        for doc_id, n in (("t1", 1), ("t2", 2), ("t-buffered", 9)):
+            row = find_by_id(oc, doc_id, coll=PURGE_COLL).get("object") or {}
+            check(f"{doc_id} is claimed after the commit and keeps n", row.get("kind") == "claimed"
+                  and row.get("n") == n, f"got {row}")
+        done = find_by_id(oc, "t3", coll=PURGE_COLL).get("object") or {}
+        check("t3 did not match and is untouched", done.get("kind") == "done", f"got {done}")
+
+
+def test_a_rolled_back_update_by_condition_changes_nothing(c):
+    section("A rolled-back SAVE with a condition changes nothing")
+
+    check_status("seed two documents", bulk_save(
+        c, [{"_id": "s1", "kind": "frozen"}, {"_id": "s2", "kind": "frozen"}], coll=PURGE_COLL), "OK")
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_field("the condition matches both", save_where(c, kind_is("frozen"), {"kind": "thawed"}), "updatedCount", 2)
+    check_field("a condition matching nothing answers 0", save_where(c, kind_is("none"), {"kind": "x"}),
+                "updatedCount", 0)
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    with authed_conn() as oc:
+        for doc_id in ("s1", "s2"):
+            row = find_by_id(oc, doc_id, coll=PURGE_COLL).get("object") or {}
+            check(f"{doc_id} is still frozen after the rollback", row.get("kind") == "frozen", f"got {row}")
+
+
 def test_bulk_save_in_transaction(c):
     section("BULK_SAVE inside a transaction")
 
@@ -274,6 +412,19 @@ def test_control_operation_errors(c):
     check_status("START_TRANSACTION", start_txn(c), "OK")
     check_code("START while already active returns 409-3", start_txn(c), "ERROR", "409-3")
     check_status("ROLLBACK_TRANSACTION (cleanup)", rollback_txn(c), "OK")
+
+
+def test_server_info_answers_inside_a_transaction(c):
+    section("SERVER_INFO is answered inside an open transaction")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("SAVE inside the transaction", save(c, {"_id": "info1", "total": 7}), "OK")
+    info = c.send({"type": "SERVER_INFO"})
+    check_status("SERVER_INFO during txn returns OK", info, "OK")
+    check_field("the node is READY", info, "server.state", "READY")
+    check_status("COMMIT_TRANSACTION after SERVER_INFO", commit_txn(c), "OK")
+    with authed_conn() as oc:
+        check_field("the transaction committed its write", find_by_id(oc, "info1"), "object.total", 7)
 
 
 def test_ddl_forbidden_during_transaction(c):
@@ -813,6 +964,8 @@ def main():
     with authed_conn() as (c):
         test_save_reports_whether_it_inserted(c)
     with authed_conn() as (c):
+        test_insert_inside_a_transaction(c)
+    with authed_conn() as (c):
         test_rollback_discards(c)
     with authed_conn() as (c):
         test_read_your_writes_aggregate(c)
@@ -821,6 +974,11 @@ def main():
         test_reduce_after_a_filter_inside_a_transaction_folds_in_id_order(c)
     with authed_conn() as (c):
         test_buffered_delete_reads_as_not_found(c)
+    with authed_conn() as (c):
+        test_delete_by_condition_inside_a_transaction(c)
+        test_a_rolled_back_delete_by_condition_keeps_everything(c)
+        test_update_by_condition_inside_a_transaction(c)
+        test_a_rolled_back_update_by_condition_changes_nothing(c)
     with authed_conn() as (c):
         test_custom_typed_writes_are_readable_inside_the_transaction(c)
     with authed_conn() as (c):
@@ -831,6 +989,8 @@ def main():
         test_several_ops_on_one_id_commit_in_buffer_order(c)
     with authed_conn() as (c):
         test_control_operation_errors(c)
+    with authed_conn() as (c):
+        test_server_info_answers_inside_a_transaction(c)
     with authed_conn() as (c):
         test_ddl_forbidden_during_transaction(c)
     with authed_conn() as (c):

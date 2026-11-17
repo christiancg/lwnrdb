@@ -113,6 +113,21 @@ public class BoundedLineReaderTest {
     }
 
     @Test
+    public void bufferedInputTellsWhetherAnotherRequestAlreadyArrived() throws IOException {
+        try (var stream = new ScriptedStream()) {
+            final var burst = reader(stream.then("one\ntwo\n").then("three\n"));
+
+            assertFalse(burst.hasBufferedInput());
+            assertEquals("one", burst.readLine(LIMIT));
+            assertTrue(burst.hasBufferedInput(), "the second line came in the same read");
+            assertEquals("two", burst.readLine(LIMIT));
+            assertFalse(burst.hasBufferedInput());
+            assertEquals("three", burst.readLine(LIMIT));
+            assertFalse(burst.hasBufferedInput());
+        }
+    }
+
+    @Test
     public void test_reads_lf_and_crlf_terminated_lines() throws IOException {
         final var reader = reader("one\ntwo\r\nthree\n");
 

@@ -1,0 +1,63 @@
+name: Release Java client
+on:
+  push:
+    tags:
+      - 'java-client-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify against the server
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Package the server jar from the same commit
+        run: mvn -B --no-transfer-progress -DskipTests package
+      - name: Unit and integration tests
+        run: |
+          mvn -B --no-transfer-progress -f clients/java/pom.xml verify -Pintegration \
+            -Drevision="${VERSION#java-client-v}" -Dlwnrdb.jar="$GITHUB_WORKSPACE/target/lwnrdb.jar"
+
+  publish:
+    name: Publish to Maven Central
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+      - name: Deploy
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          mvn -B --no-transfer-progress -f clients/java/pom.xml -P release,javadoc -DskipTests -Djacoco.skip=true \
+            -Drevision="${VERSION#java-client-v}" deploy
+      - name: GitHub release
+        run: |
+          PRERELEASE=""
+          case "${VERSION}" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "${VERSION}" --title "Java client ${VERSION#java-client-v}" --generate-notes ${PRERELEASE}

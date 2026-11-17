@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.FieldIndexLookup;
+import org.techhouse.cache.IndexIdCounts;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -21,11 +22,15 @@ import org.techhouse.ioc.IocContainer;
 public final class FieldIndexBatch {
     private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final IndexIdCounts idCounts = IocContainer.get(IndexIdCounts.class);
 
     private final String dbName;
     private final String collName;
     private final String fieldName;
     private final Collection<String> batchIds;
+    private final Map<String, List<IndexedValue>> priors;
+    private final HeldTypeLists held;
+    private final CanonicalIds canonicalIds;
     private final List<FieldIndexSlot> slots = new ArrayList<>();
     private final Map<String, FieldIndexSlot> slotsByIdentifier = new HashMap<>();
     private final Map<Class<?>, FieldIndexSlot> scalarSlots = new HashMap<>();
@@ -34,15 +39,33 @@ public final class FieldIndexBatch {
     private Set<String> scopedTo;
     private boolean loaded;
 
-    private FieldIndexBatch(String dbName, String collName, String fieldName, Collection<String> batchIds) {
+    private boolean logsOnly;
+
+    private FieldIndexBatch(String dbName, String collName, String fieldName, Collection<String> batchIds,
+            Map<String, List<IndexedValue>> priors, HeldTypeLists held, CanonicalIds canonicalIds) {
+        this.canonicalIds = canonicalIds;
         this.dbName = dbName;
         this.collName = collName;
         this.fieldName = fieldName;
         this.batchIds = batchIds;
+        this.priors = priors;
+        this.held = held;
     }
 
     public static FieldIndexBatch open(String dbName, String collName, String fieldName, Collection<String> batchIds) {
-        return new FieldIndexBatch(dbName, collName, fieldName, batchIds);
+        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, null, null,
+                new CanonicalIds(dbName, collName));
+    }
+
+    public static FieldIndexBatch open(String dbName, String collName, String fieldName, Collection<String> batchIds,
+            Map<String, List<IndexedValue>> priors) {
+        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, priors, null,
+                new CanonicalIds(dbName, collName));
+    }
+
+    static FieldIndexBatch open(String dbName, String collName, String fieldName, Collection<String> batchIds,
+            Map<String, List<IndexedValue>> priors, HeldTypeLists held, CanonicalIds canonicalIds) {
+        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, priors, held, canonicalIds);
     }
 
     private record Target(FieldIndexSlot slot, String key, Object value) {
@@ -50,9 +73,17 @@ public final class FieldIndexBatch {
 
     public void apply(String id, JsonBaseElement currentValue) throws IOException {
         loadEveryType();
-        final var target = targetOf(currentValue);
-        final var found = target == null ? null : target.slot().find(target.key(), target.value());
+        if (logsOnly) {
+            logPriorsOf(id);
+        }
         final var current = lookup.locate(id);
+        if (!logsOnly && current != null && current.next() == null
+                && IndexedValue.holdsSameScalar(current.entry().getValue(), currentValue)) {
+            return;
+        }
+        final var target = targetOf(currentValue);
+        final var loggedTarget = target != null && target.slot().isLogOnly();
+        final var found = target == null || loggedTarget ? null : target.slot().find(target.key(), target.value());
         if (current != null && found != null && alreadyHolds(current, target, found)) {
             return;
         }
@@ -61,11 +92,29 @@ public final class FieldIndexBatch {
                 slotsByIdentifier.get(at.typeIdentifier()).removeId(id, at.entry());
             }
         }
-        if (target != null) {
+        if (loggedTarget) {
+            target.slot().logChange(target.key(), id, true);
+            lookup.moved(id, null);
+        } else if (target != null) {
             final var entry = target.slot().addId(id, target.key(), target.value(), found);
             lookup.moved(id, new FieldIndexLookup.Located(target.slot().identifier(), entry, null));
         } else {
             lookup.moved(id, null);
+        }
+    }
+
+    private void logPriorsOf(String id) {
+        final var values = priors.get(id);
+        if (values == null) {
+            return;
+        }
+        for (final var prior : values) {
+            final var slot = prior == null
+                    ? null
+                    : prior.isHashed() ? hashSlots.get(prior.kind()) : scalarSlots.get(prior.type());
+            if (slot != null && slot.isLogOnly()) {
+                slot.logChange(prior.key(), id, false);
+            }
         }
     }
 
@@ -76,21 +125,34 @@ public final class FieldIndexBatch {
     }
 
     public void flush() throws IOException {
+        FieldIndexFolds.runHoldingLocks(flushLeavingFolds());
+    }
+
+    public List<DeferredFold> flushLeavingFolds() throws IOException {
+        final var folds = new ArrayList<DeferredFold>(0);
         var firstWritten = false;
         for (final var slot : slots) {
-            if (slot.write() && !firstWritten) {
+            if (!slot.write()) {
+                continue;
+            }
+            if (!firstWritten) {
                 firstWritten = true;
                 faultInjector.at(FaultPoint.INDEX_BATCH_FLUSHED, Cache.getCollectionIdentifier(dbName, collName));
+            }
+            if (slot.fold() != null) {
+                folds.add(new DeferredFold(slot.identifier(), slot.fold()));
             }
         }
         for (final var slot : slots) {
             slot.publish();
+            idCounts.adjust(dbName, collName, slot.identifier(), slot.idsAdded(), slot.idsRemoved());
         }
         if (scopedTo != null) {
             cache.evictFieldIndexLookup(dbName, collName, fieldName);
         } else {
             keepLookupWhileCovered();
         }
+        return folds;
     }
 
     private void keepLookupWhileCovered() {
@@ -113,43 +175,56 @@ public final class FieldIndexBatch {
         loaded = true;
         var covered = true;
         for (final var type : IndexKind.scalarIndexClasses()) {
-            if (mayHaveAFile(Cache.getIndexIdentifier(fieldName, type))) {
+            if (mayHaveAFile(Cache.memoizedIndexIdentifier(fieldName, type))) {
                 covered &= register(scalarSlots.computeIfAbsent(type,
-                        _ -> FieldIndexSlot.scalar(dbName, collName, fieldName, type)));
+                        _ -> FieldIndexSlot.scalar(dbName, collName, fieldName, type, held, canonicalIds)));
             }
         }
         for (final var kind : IndexKind.HASH_KINDS) {
-            if (mayHaveAFile(Cache.getHashIndexIdentifier(fieldName, kind.label()))) {
-                covered &= register(
-                        hashSlots.computeIfAbsent(kind, _ -> FieldIndexSlot.hash(dbName, collName, fieldName, kind)));
+            if (mayHaveAFile(Cache.memoizedHashIndexIdentifier(fieldName, kind))) {
+                covered &= register(hashSlots.computeIfAbsent(kind,
+                        _ -> FieldIndexSlot.hash(dbName, collName, fieldName, kind, held, canonicalIds)));
             }
         }
-        lookup = covered && slots.stream().anyMatch(FieldIndexSlot::isResident)
-                ? cache.fieldIndexLookup(dbName, collName, fieldName)
-                : null;
+        lookup = covered && anyResident() ? cache.fieldIndexLookup(dbName, collName, fieldName) : null;
         if (lookup == null) {
             buildLookup(covered);
         }
     }
 
-    private void buildLookup(boolean covered) {
-        var ids = 0L;
+    private boolean anyResident() {
         for (final var slot : slots) {
-            ids += slot.idCount();
+            if (slot.isResident()) {
+                return true;
+            }
         }
-        final var full = covered
-                && cache.mayAdmitFieldIndexLookup(dbName, collName, fieldName, (int) Math.min(Integer.MAX_VALUE, ids));
+        return false;
+    }
+
+    private void buildLookup(boolean covered) {
+        final var ids = covered ? Math.min(Integer.MAX_VALUE, idCount()) : 0L;
+        final var full = covered && cache.mayAdmitFieldIndexLookup(dbName, collName, fieldName, (int) ids);
         scopedTo = full ? null : new HashSet<>(batchIds);
-        lookup = new FieldIndexLookup(full ? (int) Math.min(Integer.MAX_VALUE, ids) : scopedTo.size());
+        lookup = new FieldIndexLookup(full ? (int) ids : scopedTo.size());
         for (final var slot : slots) {
             slot.indexInto(lookup, scopedTo);
         }
     }
 
+    private long idCount() {
+        var ids = 0L;
+        for (final var slot : slots) {
+            ids += slot.idCount();
+        }
+        return ids;
+    }
+
     private boolean register(FieldIndexSlot slot) throws IOException {
         slots.add(slot);
         slotsByIdentifier.put(slot.identifier(), slot);
-        return slot.attach();
+        final var covered = slot.attach(priors != null);
+        logsOnly |= slot.isLogOnly();
+        return covered;
     }
 
     private boolean mayHaveAFile(String indexIdentifier) {
@@ -161,7 +236,7 @@ public final class FieldIndexBatch {
         if (existing != null) {
             return existing;
         }
-        final var slot = FieldIndexSlot.scalar(dbName, collName, fieldName, type);
+        final var slot = FieldIndexSlot.scalar(dbName, collName, fieldName, type, held, canonicalIds);
         scalarSlots.put(type, slot);
         return registerLate(slot);
     }
@@ -171,7 +246,7 @@ public final class FieldIndexBatch {
         if (existing != null) {
             return existing;
         }
-        final var slot = FieldIndexSlot.hash(dbName, collName, fieldName, kind);
+        final var slot = FieldIndexSlot.hash(dbName, collName, fieldName, kind, held, canonicalIds);
         hashSlots.put(kind, slot);
         return registerLate(slot);
     }

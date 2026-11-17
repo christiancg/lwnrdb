@@ -1,5 +1,6 @@
 package org.techhouse.client;
 
+import java.util.List;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -14,7 +15,10 @@ public final class Requests {
     public static final String PROCEDURE_NAME = "procedureName";
     public static final String CRON = "cron";
     public static final String INTERVAL_MS = "intervalMs";
-    private static final String STEPS = "aggregationSteps";
+    public static final String SNAPSHOT_ID = "snapshotId";
+    public static final String COLLECTION_NAMES = "collectionNames";
+    private static final String AFTER_ID = "afterId";
+    private static final String LIMIT = "limit";
 
     private Requests() {
     }
@@ -30,6 +34,10 @@ public final class Requests {
         return typed("CLOSE_CONNECTION");
     }
 
+    public static JsonObject serverInfo() {
+        return typed("SERVER_INFO");
+    }
+
     public static JsonObject listDatabases() {
         return typed("LIST_DATABASES");
     }
@@ -42,12 +50,30 @@ public final class Requests {
         return typed("GET_DATABASE_STATS");
     }
 
-    public static JsonObject aggregatePage(String database, String collection, int skip, int limit) {
-        final var request = onCollection("AGGREGATE", database, collection);
-        final var steps = new JsonArray();
-        steps.add(step("SKIP", "skip", skip));
-        steps.add(step("LIMIT", "limit", limit));
-        request.add(STEPS, steps);
+    public static JsonObject startSnapshot(String database, List<String> collections) {
+        final var request = onDatabase("START_SNAPSHOT", database);
+        final var names = new JsonArray();
+        for (final var collection : collections) {
+            names.add(new JsonString(collection));
+        }
+        request.add(COLLECTION_NAMES, names);
+        return request;
+    }
+
+    public static JsonObject readSnapshot(String database, String collection, String snapshotId, String afterId,
+            int limit) {
+        final var request = onCollection("READ_SNAPSHOT", database, collection);
+        request.add(SNAPSHOT_ID, new JsonString(snapshotId));
+        if (afterId != null) {
+            request.add(AFTER_ID, new JsonString(afterId));
+        }
+        request.add(LIMIT, new JsonNumber(limit));
+        return request;
+    }
+
+    public static JsonObject releaseSnapshot(String database, String snapshotId) {
+        final var request = onDatabase("RELEASE_SNAPSHOT", database);
+        request.add(SNAPSHOT_ID, new JsonString(snapshotId));
         return request;
     }
 
@@ -91,9 +117,13 @@ public final class Requests {
         return request;
     }
 
-    public static JsonObject createIndex(String database, String collection, String field) {
+    public static JsonObject createIndexes(String database, String collection, List<String> fields) {
         final var request = onCollection("CREATE_INDEX", database, collection);
-        request.add("fieldName", new JsonString(field));
+        final var names = new JsonArray();
+        for (final var field : fields) {
+            names.add(new JsonString(field));
+        }
+        request.add("fieldNames", names);
         return request;
     }
 
@@ -133,12 +163,6 @@ public final class Requests {
                 to.add(field, value);
             }
         }
-    }
-
-    private static JsonObject step(String type, String field, int value) {
-        final var step = typed(type);
-        step.add(field, new JsonNumber(value));
-        return step;
     }
 
     private static JsonObject typed(String type) {

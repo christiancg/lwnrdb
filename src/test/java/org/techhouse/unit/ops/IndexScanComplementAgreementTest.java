@@ -259,14 +259,16 @@ public class IndexScanComplementAgreementTest extends FilterResolutionSupport {
     }
 
     @Test
-    public void test_the_complement_still_uses_the_index_when_every_non_pending_id_is_indexed() throws Exception {
+    public void test_the_complement_is_counted_only_while_nothing_is_pending() throws Exception {
         insert("a", FIELD, new JsonNumber(1));
         insert("b", FIELD, new JsonNumber(2));
         insert("c", FIELD, new JsonNumber(3));
         indexField(FIELD);
+        assertEquals(Set.of("a", "b", "c"), idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonNumber(5)));
         deleteWithIndexMaintenancePending("c");
 
-        assertNotNull(idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonNumber(5)),
-                "a pending id is re-derived by the reconciler, so it must not force a scan");
+        assertNull(idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonNumber(5)),
+                "coverage is a count, and a pending id may still be counted, so the complement declines");
+        assertEquals(2, rowsJson(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(5))).size());
     }
 }

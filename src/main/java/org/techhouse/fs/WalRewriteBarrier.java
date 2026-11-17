@@ -20,10 +20,19 @@ final class WalRewriteBarrier {
     }
 
     Begun begin(String dbName, String collName, long page, long lengthBefore) throws IOException {
-        return new Begun(dbName, collName, page, wal.beginRewrite(dbName, collName, page, lengthBefore));
+        return begin(dbName, collName, page, lengthBefore, new ForceGroup());
+    }
+
+    Begun begin(String dbName, String collName, long page, long lengthBefore, ForceGroup alongside) throws IOException {
+        return new Begun(dbName, collName, page, wal.beginRewrite(dbName, collName, page, lengthBefore, alongside));
+    }
+
+    void renamed(Begun begun) {
+        wal.rewriteLanded(begun.dbName(), begun.collName(), begun.page());
     }
 
     boolean landed(Begun begun, Path folder) {
+        renamed(begun);
         try {
             SyncedWrites.entries(folder);
             return true;

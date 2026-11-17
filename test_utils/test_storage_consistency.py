@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +11,7 @@ import base_utils as bu
 import transaction_kills
 import write_intent_kills
 from base_utils import check, check_code, check_field, check_status, section
+from durability.oracles import actual_pages, live_records, occupancy_drift, page_files, recorded_pages, settled_drift
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("STORAGE_CONSISTENCY_TEST_PORT", "8996"))
@@ -96,6 +98,7 @@ HEAL_SEEDED = 1000
 RACE_SECONDS = 3.0
 RACE_MAX_SECONDS = 90.0
 RACE_MIN_WRITES = 100
+RACE_MIN_CORRUPTIONS = 100
 
 PERM_USER_PREFIX = "page_grow_user_"
 PERM_FILL_PREFIX = "page_fill_user_"
@@ -151,6 +154,7 @@ def write_config(work_dir: str, max_memory: str = "256mb", faults: bool = False)
 
 
 DURABILITY_WARNING = "DURABILITY WARNING: syncWrites=false"
+DEVICE_SYNC_FALLBACK = "this platform cannot sync a directory"
 
 
 def test_the_durability_warning_follows_sync_writes():
@@ -166,20 +170,19 @@ def test_the_durability_warning_follows_sync_writes():
                 with admin_conn() as conn:
                     check_status(f"a write is acknowledged with syncWrites={synced}",
                                  conn.send({"type": "CREATE_DATABASE", "databaseName": f"synced{int(synced)}"}), "OK")
+                    effective = bu.server_syncs_writes(conn)
             finally:
                 bu.stop_server(proc)
-            warned = DURABILITY_WARNING in bu.read_log(log_path)[offset:]
-            check(f"the durability warning is {'absent' if synced else 'logged'} with syncWrites={synced}",
-                  warned != synced)
+            logged = bu.read_log(log_path)[offset:]
+            warned = DURABILITY_WARNING in logged
+            if synced and not effective:
+                check("a platform that cannot sync a folder logs the fallback and runs unsynced",
+                      DEVICE_SYNC_FALLBACK in logged and warned, "SERVER_INFO reports syncWrites=false")
+            else:
+                check(f"the durability warning is {'absent' if synced else 'logged'} with syncWrites={synced}",
+                      warned != synced)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-
-
-def page_files(work_dir: str, db=DB, coll=COLL):
-    folder = os.path.join(work_dir, "db", db, coll)
-    if not os.path.isdir(folder):
-        return []
-    return sorted(f for f in os.listdir(folder) if f.endswith(".dat"))
 
 
 def page_metadata_bytes(work_dir: str, db=DB, coll=COLL) -> int:
@@ -188,27 +191,6 @@ def page_metadata_bytes(work_dir: str, db=DB, coll=COLL) -> int:
         return 0
     return sum(os.path.getsize(os.path.join(folder, f))
                for f in os.listdir(folder) if f.endswith(".dat"))
-
-
-def recorded_pages(work_dir: str, db=DB, coll=COLL) -> dict:
-    folder = os.path.join(work_dir, "db", "admin", "pages", f"{db}_{coll}")
-    prefix = f"{db}|{coll}|"
-    rows = {}
-    if not os.path.isdir(folder):
-        return rows
-    for name in sorted(f for f in os.listdir(folder) if f.endswith(".dat")):
-        with open(os.path.join(folder, name), "r", encoding="utf-8", errors="replace") as fp:
-            for line in fp:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if str(row.get("_id", "")).startswith(prefix):
-                    rows[int(row["page"])] = row
-    return rows
 
 
 PAGE_ROW_REBUILD = "Rebuilt the page-occupancy metadata of"
@@ -239,38 +221,6 @@ def test_page_rows_equal_live_bytes_after_a_kill_with_dirty_rows(work_dir: str):
     drift = occupancy_drift(recorded_pages(work_dir, DB, write_intent_kills.CONCURRENT_COLL),
                             actual_pages(work_dir, DB, write_intent_kills.CONCURRENT_COLL))
     check("every page row equals its page's live bytes and entries", not drift, "; ".join(drift))
-
-
-def live_records(content: bytes) -> list:
-    return [line + b"\n" for line in content.split(b"\n")[:-1] if line and not line.startswith(b" ")]
-
-
-def actual_pages(work_dir: str, db=DB, coll=COLL) -> dict:
-    folder = os.path.join(work_dir, "db", db, coll)
-    pages = {}
-    for name in page_files(work_dir, db, coll):
-        with open(os.path.join(folder, name), "rb") as fp:
-            records = live_records(fp.read())
-        pages[int(name[len(coll) + 1:-len(".dat")])] = (sum(len(record) for record in records), len(records))
-    return pages
-
-
-def occupancy_drift(recorded: dict, actual: dict, entries: bool = True) -> list:
-    def drifted(page) -> bool:
-        row = recorded.get(page)
-        return row is None or row["size"] != actual[page][0] or (entries and row["entryCount"] != actual[page][1])
-
-    def describe(page) -> str:
-        size, count = actual[page]
-        on_disk = f"on disk {size}B/{count} entries" if entries else f"on disk {size}B"
-        row = recorded.get(page)
-        if row is None:
-            return f"page {page}: no recorded row, {on_disk}"
-        if entries:
-            return f"page {page}: recorded {row['size']}B/{row['entryCount']} entries, {on_disk}"
-        return f"page {page}: recorded {row['size']}B, {on_disk}"
-
-    return [describe(page) for page in sorted(actual) if drifted(page)]
 
 
 def oversized_pages(work_dir: str, coll: str, limit: int, db=DB) -> dict:
@@ -310,8 +260,7 @@ def pk_index_ids(index_file: str) -> set:
 
 def append_torn_pk_line(work_dir: str, db=DB, coll=COLL) -> None:
     bu.damage_after_the_last_checkpoint(os.path.dirname(pk_index_file(work_dir, db, coll)))
-    with open(pk_index_file(work_dir, db, coll), "a", encoding="utf-8") as fp:
-        fp.write("torn pk index line\n")
+    bu.append_atomically(pk_index_file(work_dir, db, coll), b"torn pk index line\n")
 
 
 def seed(conn: Conn, work_dir: str):
@@ -346,7 +295,7 @@ def seed(conn: Conn, work_dir: str):
     seed_script_written_documents(conn)
     seed_collections_spanning_several_admin_pages(conn, work_dir)
 
-    files = page_files(work_dir)
+    files = page_files(work_dir, DB, COLL)
     check("the collection really spans several pages", len(files) > 1, f"got {files}")
     bu.wait_until(lambda: page_metadata_bytes(work_dir) > 0, timeout_s=5.0, interval_s=0.1)
     check("page metadata is persisted for a user collection", page_metadata_bytes(work_dir) > 0,
@@ -759,7 +708,11 @@ def test_a_stray_copy_of_a_held_id_is_cut_at_startup(conn: Conn, work_dir: str):
     page = os.path.join(work_dir, "db", DB, REBUILD_STRAY_COLL, page_files(work_dir, DB, REBUILD_STRAY_COLL)[0])
     with open(page, "rb") as fp:
         records = [line for line in fp.read().split(b"\n") if line.startswith(b"{")]
-    check("the stray copy is gone from the page", len(records) == len(REBUILD_IDS), f"records={records}")
+    if bu.server_syncs_writes(conn):
+        check("the stray copy is gone from the page", len(records) == len(REBUILD_IDS), f"records={records}")
+    else:
+        check("without synced writes the stray copy is kept, since it may be an update whose record was lost",
+              len(records) == len(REBUILD_IDS) + 1, f"records={records}")
     scanned = sorted(doc["_id"] for doc in conn.aggregate(REBUILD_STRAY_COLL, []).get("results") or [])
     check("a scan returns every id once", scanned == sorted(REBUILD_IDS), f"ids={scanned}")
     check_status("the indexed version still reads", conn.find("alpha", coll=REBUILD_STRAY_COLL), "OK")
@@ -1215,14 +1168,6 @@ def create_user(conn: Conn, username: str) -> dict:
                       "collectionPermissions": {}, "scriptPermissions": {}})
 
 
-def settled_drift(work_dir: str, db: str, coll: str, entries: bool = True, timeout_s: float = 10.0) -> list:
-    def drift():
-        return occupancy_drift(recorded_pages(work_dir, db, coll), actual_pages(work_dir, db, coll), entries)
-
-    bu.wait_until(lambda: not drift(), timeout_s=timeout_s, interval_s=0.2)
-    return drift()
-
-
 def test_page_metadata_follows_an_admin_row_that_grows_on_update(conn: Conn, work_dir: str):
     section("Page occupancy for an admin row that grows on update")
     refused = []
@@ -1516,13 +1461,38 @@ def arrange_a_killed_commit_with_repeated_ids(conn: Conn, work_dir: str):
     check_status("buffer the delete of r2", conn.send(
         {"type": "DELETE", "databaseName": DB, "collectionName": REPLAY_COLL, "_id": "r2"}), "OK")
     check_status("buffer the op that will not apply", conn.save({"_id": "blocker", "v": 1}, coll=REPLAY_FENCE_COLL), "OK")
-    os.chmod(replay_fence_folder(work_dir), 0o000)
+    bu.deny_access(replay_fence_folder(work_dir))
     check_code("the commit fences past its commit point",
                conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
 
 
+REDRIVE_COLL = "redriven_fence"
+
+
+def test_a_fenced_commit_finishes_once_the_fault_clears(conn: Conn, work_dir: str):
+    section("A commit fenced by a transient I/O failure finishes by itself once the fault clears")
+    check_status(f"create {REDRIVE_COLL}", conn.create_coll(REDRIVE_COLL), "OK")
+    folder = os.path.join(work_dir, "db", DB, REDRIVE_COLL)
+    with admin_conn() as holder:
+        check_status("start the transaction", holder.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("buffer a save", holder.save({"_id": "redriven", "v": 1}, coll=REDRIVE_COLL), "OK")
+        bu.deny_access(folder)
+        try:
+            check_code("the commit fences past its commit point",
+                       holder.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
+        finally:
+            bu.restore_access(folder, 0o755)
+        landed = bu.wait_until(lambda: conn.find("redriven", coll=REDRIVE_COLL).get("status") == "OK", 20, 0.3)
+        check("the fence is re-driven in the background and the document lands, with no restart", bool(landed),
+              f"got {conn.find('redriven', coll=REDRIVE_COLL)}")
+        check_status("the collection takes writes again",
+                     conn.save({"_id": "after-fence", "v": 1}, coll=REDRIVE_COLL), "OK")
+        check_status("a COMMIT re-sent after the background finish answers OK",
+                     holder.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+
 def release_the_replay_fence(work_dir: str):
-    os.chmod(replay_fence_folder(work_dir), 0o755)
+    bu.restore_access(replay_fence_folder(work_dir), 0o755)
     check("the commit marker outlived the kill", bu.local_commit_markers(work_dir) == 1,
           "with no marker the restart has nothing to replay, so the checks after it would be vacuous")
 
@@ -2002,6 +1972,13 @@ def test_a_script_predicate_returning_infinity_keeps_its_document(conn: Conn):
               f"index={got}, scan={scanned}")
 
 
+def heals_logged_since(log_path: str, log_offset: int) -> int:
+    with open(log_path, "rb") as fp:
+        fp.seek(log_offset)
+        logged = fp.read()
+    return logged.decode(errors="replace").count(f"PK index entry in {HEAL_COLL}-pk")
+
+
 def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, log_path: str):
     section("A PK-index self-heal racing committed writes")
 
@@ -2010,6 +1987,7 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
 
     log_offset = os.path.getsize(log_path)
     committed = []
+    corruptions = []
     errors = []
     stop = threading.Event()
     guard = threading.Lock()
@@ -2039,6 +2017,7 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
         while not stop.is_set():
             try:
                 append_torn_pk_line(work_dir, DB, HEAL_COLL)
+                corruptions.append(time.monotonic())
             except OSError:
                 pass
             time.sleep(0.005)
@@ -2050,7 +2029,8 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
     for thread in threads:
         thread.start()
     time.sleep(RACE_SECONDS)
-    while len(committed) <= RACE_MIN_WRITES and time.monotonic() - started < RACE_MAX_SECONDS:
+    while ((len(committed) <= RACE_MIN_WRITES or len(corruptions) <= RACE_MIN_CORRUPTIONS)
+           and time.monotonic() - started < RACE_MAX_SECONDS):
         time.sleep(0.2)
     raced_for = time.monotonic() - started
     stop.set()
@@ -2061,11 +2041,10 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
     check("the race committed enough writes to be worth asserting on", len(committed) > RACE_MIN_WRITES,
           f"only {len(committed)} writes committed in {raced_for:.1f}s")
 
-    with open(log_path, "rb") as fp:
-        fp.seek(log_offset)
-        heals = fp.read().decode(errors="replace").count(f"PK index entry in {HEAL_COLL}-pk")
-    check("the writes really did race a self-heal", heals > 20,
-          f"only {heals} self-heals fired, so the assertions below prove little")
+    heals = heals_logged_since(log_path, log_offset)
+    check("the writes really did race torn lines appended to the live PK index",
+          len(corruptions) > RACE_MIN_CORRUPTIONS,
+          f"{len(corruptions)} torn lines appended and {heals} self-heals fired in {raced_for:.1f}s")
 
     missing = sorted(set(committed) - pk_index_ids(index_file))
     check("no committed write was erased from the PK index by a self-heal", not missing,
@@ -2224,32 +2203,32 @@ GROUP_FORCE_COLL = "group_force_window"
 
 def test_a_paused_group_force_lets_point_reads_through_and_holds_scans(conn: Conn):
     section("While a write group's log force is paused, FIND_BY_ID answers the grouped value and a scan waits")
+    if not bu.server_syncs_writes(conn):
+        bu.warn("skipped: the server runs without synced writes on this platform, so no write group forces")
+        return
     check_status("create the grouped collection", conn.create_coll(GROUP_FORCE_COLL), "OK")
     for i in range(4):
         check_status(f"seed g{i}", conn.save({"_id": f"g{i}", "v": "old"}, coll=GROUP_FORCE_COLL), "OK")
     subject = f"{DB}|{GROUP_FORCE_COLL}"
-    check_status("park the first writer under the collection lock",
-                 conn.send({"type": "ARM_FAULT", "point": "WRITE_OWNER_PROBED", "action": "PAUSE",
-                            "match": subject}), "OK")
     answers = {}
 
-    def write(doc_id: str):
+    def write(doc_id: str, value: str = "new"):
         with admin_conn() as own:
-            answers[doc_id] = own.save({"_id": doc_id, "v": "new"}, coll=GROUP_FORCE_COLL).get("status")
+            answers[doc_id] = own.save({"_id": doc_id, "v": value}, coll=GROUP_FORCE_COLL).get("status")
 
-    writers = [threading.Thread(target=write, args=("g0",))]
-    writers[0].start()
-    check_status("the first writer is parked", conn.send({"type": "AWAIT_FAULT", "point": "WRITE_OWNER_PROBED",
-                                                          "timeoutMs": 30000}), "OK")
-    for doc_id in ("g1", "g2", "g3"):
-        writers.append(threading.Thread(target=write, args=(doc_id,)))
-        writers[-1].start()
-    time.sleep(0.5)
-    check_status("park the next group at its log force",
-                 conn.send({"type": "ARM_FAULT", "point": "WAL_GROUP_APPENDED", "action": "PAUSE",
-                            "match": subject}), "OK")
-    check_status("release the first writer", conn.send({"type": "RELEASE_FAULT", "point": "WRITE_OWNER_PROBED"}),
-                 "OK")
+    writers = [threading.Thread(target=write, args=(f"g{i}",)) for i in range(4)]
+    with admin_conn() as holder:
+        check_status("a transaction takes the collection lock", holder.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("its buffered write holds it until the rollback",
+                     holder.save({"_id": "lock_holder", "v": "never"}, coll=GROUP_FORCE_COLL), "OK")
+        for writer in writers:
+            writer.start()
+        time.sleep(0.5)
+        check_status("park the group at its log force",
+                     conn.send({"type": "ARM_FAULT", "point": "WAL_GROUP_APPENDED", "action": "PAUSE",
+                                "match": subject}), "OK")
+        check_status("roll back so the queued writers form one group",
+                     holder.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
     check_status("the queued writers formed a group and reached its force",
                  conn.send({"type": "AWAIT_FAULT", "point": "WAL_GROUP_APPENDED", "timeoutMs": 30000}), "OK")
     with admin_conn() as reader:
@@ -2277,6 +2256,22 @@ def test_a_paused_group_force_lets_point_reads_through_and_holds_scans(conn: Con
           f"got {scanned}")
     check("each document holds its grouped value",
           all((conn.find(f"g{i}", coll=GROUP_FORCE_COLL).get("object") or {}).get("v") == "new" for i in range(4)))
+    check_status("park a lone write at its log force",
+                 conn.send({"type": "ARM_FAULT", "point": "WAL_GROUP_APPENDED", "action": "PAUSE",
+                            "match": subject}), "OK")
+    lone = threading.Thread(target=write, args=("g1", "lone"))
+    lone.start()
+    check_status("a lone write forces inside a settle window too",
+                 conn.send({"type": "AWAIT_FAULT", "point": "WAL_GROUP_APPENDED", "timeoutMs": 30000}), "OK")
+    with admin_conn() as reader:
+        started = time.monotonic()
+        found = reader.find("g1", coll=GROUP_FORCE_COLL)
+        check("FIND_BY_ID answers the lone write's value while its force is paused",
+              (found.get("object") or {}).get("v") == "lone", f"got {found}")
+        check("and does not wait for that force", time.monotonic() - started < 5.0)
+    check_status("release the lone write", conn.send({"type": "RELEASE_FAULT", "point": "WAL_GROUP_APPENDED"}), "OK")
+    lone.join(30)
+    check("the lone write was acknowledged", answers.get("g1") == "OK", f"got {answers}")
 
 
 def test_updates_on_a_large_collection_stay_fast(conn: Conn):
@@ -2469,7 +2464,7 @@ def stop_the_node_under_a_connected_writer(proc) -> list:
     thread = threading.Thread(target=hammer_until_refused, args=(acknowledged,), daemon=True)
     thread.start()
     bu.wait_until(lambda: len(acknowledged) >= 50, timeout_s=30, interval_s=0.05)
-    proc.terminate()
+    bu.terminate_server(proc)
     thread.join(60)
     proc.wait(timeout=60)
     return list(acknowledged)
@@ -2621,7 +2616,7 @@ def dirty_every_collection(conn: Conn):
 def test_a_sigterm_with_many_dirty_logs_exits_within_its_budget(proc, log_path: str, offset: int):
     section(f"a SIGTERM with {SHUTDOWN_COLLECTIONS} dirty write-ahead logs stops within shutdownTimeoutMs")
     started = time.monotonic()
-    proc.terminate()
+    bu.terminate_server(proc)
     try:
         proc.wait(timeout=60)
     except subprocess.TimeoutExpired:
@@ -2740,6 +2735,184 @@ def run_reindex_kill_phase():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+PENDING_DB = "pending_frame_db"
+PENDING_COLL = "pending_docs"
+PENDING_DOCS = 2000
+PENDING_CATEGORIES = 7
+PENDING_FRAME = b"I"
+CHECKPOINT_FRAME = b"C"
+
+
+def pending_frames(work_dir: str, db: str = PENDING_DB, coll: str = PENDING_COLL) -> int:
+    path = os.path.join(work_dir, "db", db, coll, f"{coll}.wal")
+    if not os.path.isfile(path):
+        return 0
+    with open(path, "rb") as fp:
+        data = fp.read()
+    at, frames = 0, 0
+    while at + bu.WAL_HEADER_BYTES <= len(data) and data[at:at + 1] == b"W":
+        kind = data[at + 1:at + 2]
+        length = int.from_bytes(data[at + 10:at + 14], "big")
+        if at + bu.WAL_HEADER_BYTES + length > len(data):
+            break
+        frames = 0 if kind == CHECKPOINT_FRAME else frames + (1 if kind == PENDING_FRAME else 0)
+        at += bu.WAL_HEADER_BYTES + length
+    return frames
+
+
+def pending_index_agrees_with_scan(conn: Conn) -> bool:
+    step = bu.filter_step("cat", "EQUALS", "c3")
+    expected = len([i for i in range(PENDING_DOCS) if i % PENDING_CATEGORIES == 3])
+    indexed = conn.count(PENDING_COLL, [step], db=PENDING_DB)
+    scanned = conn.count(PENDING_COLL, [{"type": "SKIP", "skip": 0}, step], db=PENDING_DB)
+    return indexed == scanned == expected
+
+
+def test_restart_after_pending_frame_is_clean(work_dir: str, log_path: str):
+    section("a PENDING frame whose ids are resolved is dropped by the clean stop, so later restarts repair nothing")
+    folder = os.path.join(work_dir, "db", PENDING_DB, PENDING_COLL)
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            check_status("the pending-frame database is created",
+                         conn.send({"type": "CREATE_DATABASE", "databaseName": PENDING_DB}), "OK")
+            check_status("its collection is created", conn.create_coll(PENDING_COLL, db=PENDING_DB), "OK")
+            check_status("its collection is indexed", conn.create_index("cat", coll=PENDING_COLL, db=PENDING_DB), "OK")
+            objects = [{"_id": f"p{i}", "cat": f"c{i % PENDING_CATEGORIES}"} for i in range(PENDING_DOCS)]
+            check_status("one BULK_SAVE fills the log past twice its checkpoint size",
+                         conn.send({"type": "BULK_SAVE", "databaseName": PENDING_DB, "collectionName": PENDING_COLL,
+                                    "objects": objects}), "OK")
+            check("the checkpoint after the BULK_SAVE logged its still-pending ids", pending_frames(work_dir) == 1,
+                  f"{pending_frames(work_dir)} frame(s)")
+            bu.wait_until(lambda: pending_index_agrees_with_scan(conn), timeout_s=15, interval_s=0.2)
+            check("the index work of the BULK_SAVE finished before the stop", pending_index_agrees_with_scan(conn))
+    finally:
+        bu.stop_server(proc)
+    check("the clean stop rewrote the log without the resolved frame", pending_frames(work_dir) == 0,
+          f"{pending_frames(work_dir)} frame(s)")
+    for restart in (1, 2):
+        proc = bu.start_server(work_dir, log_path)
+        try:
+            with admin_conn() as conn:
+                check(f"restart {restart}: the index answers exactly like a scan", pending_index_agrees_with_scan(conn))
+        finally:
+            bu.stop_server(proc)
+        check(f"restart {restart} leaves a log with no PENDING frame and no record to replay",
+              pending_frames(work_dir) == 0 and bu.logged_writes(folder) == 0,
+              f"{pending_frames(work_dir)} frame(s), {bu.logged_writes(folder)} record(s)")
+
+
+def run_pending_frame_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-pending-frame-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, walCheckpointBytes=WAL_CHECKPOINT_BYTES,
+                    walIdleCheckpointMs=60000)
+    test_restart_after_pending_frame_is_clean(work_dir, log_path)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+STALE_DB = "stale_pending_db"
+STALE_COLL = "stale_docs"
+STALE_REPAIRED_LINE = f"Repaired the field indexes of {STALE_DB}|{STALE_COLL} for "
+STALE_SETTLE_S = 3.0
+
+
+def stale_index_agrees_with_scan(conn: Conn) -> bool:
+    step = bu.filter_step("cat", "EQUALS", "c3")
+    expected = len([i for i in range(PENDING_DOCS) if i % PENDING_CATEGORIES == 3])
+    indexed = conn.count(STALE_COLL, [step], db=STALE_DB)
+    scanned = conn.count(STALE_COLL, [{"type": "SKIP", "skip": 0}, step], db=STALE_DB)
+    return indexed == scanned == expected
+
+
+def background_idle(conn: Conn) -> bool:
+    background = conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("background", {})
+    return background.get("maintenance", 1) == 0 and background.get("pending", 1) == 0
+
+
+def stale_repairs_since(log_path: str, offset: int) -> int:
+    return bu.read_log(log_path)[offset:].count(STALE_REPAIRED_LINE)
+
+
+def checkpoint_with_pending_ids_then_kill(work_dir: str, log_path: str):
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            check_status("the stale-frame database is created",
+                         conn.send({"type": "CREATE_DATABASE", "databaseName": STALE_DB}), "OK")
+            check_status("its collection is created", conn.create_coll(STALE_COLL, db=STALE_DB), "OK")
+            check_status("its collection is indexed", conn.create_index("cat", coll=STALE_COLL, db=STALE_DB), "OK")
+            check_status("arm WAL_CHECKPOINT_FORCED PAUSE on the collection",
+                         conn.send({"type": "ARM_FAULT", "point": "WAL_CHECKPOINT_FORCED", "action": "PAUSE",
+                                    "match": f"{STALE_DB}|{STALE_COLL}"}), "OK")
+            objects = [{"_id": f"s{i}", "cat": f"c{i % PENDING_CATEGORIES}"} for i in range(PENDING_DOCS)]
+            outcome = {}
+
+            def bulk():
+                with admin_conn() as writer:
+                    outcome["response"] = writer.send({"type": "BULK_SAVE", "databaseName": STALE_DB,
+                                                       "collectionName": STALE_COLL, "objects": objects})
+
+            writer_thread = threading.Thread(target=bulk, daemon=True)
+            writer_thread.start()
+            check_status("the checkpoint is held while the BULK_SAVE's index work is pending",
+                         conn.send({"type": "AWAIT_FAULT", "point": "WAL_CHECKPOINT_FORCED", "timeoutMs": 30000}),
+                         "OK")
+            check_status("release the checkpoint", conn.send({"type": "RELEASE_FAULT",
+                                                              "point": "WAL_CHECKPOINT_FORCED"}), "OK")
+            writer_thread.join(timeout=60)
+            check_status("the BULK_SAVE is acknowledged", outcome.get("response", {}), "OK")
+            check("the checkpoint logged the pending ids as a PENDING frame",
+                  pending_frames(work_dir, STALE_DB, STALE_COLL) == 1,
+                  f"{pending_frames(work_dir, STALE_DB, STALE_COLL)} frame(s)")
+            bu.wait_until(lambda: stale_index_agrees_with_scan(conn) and background_idle(conn), timeout_s=30,
+                          interval_s=0.2)
+            check("the index work finished before the kill", stale_index_agrees_with_scan(conn))
+    finally:
+        proc.kill()
+        proc.wait(timeout=30)
+    check("the kill left the PENDING frame in the log", pending_frames(work_dir, STALE_DB, STALE_COLL) == 1,
+          f"{pending_frames(work_dir, STALE_DB, STALE_COLL)} frame(s)")
+
+
+def test_a_pending_frame_is_not_replayed_on_every_restart(work_dir: str, log_path: str):
+    section("a PENDING frame left by a kill is repaired once: the restart after the repair replays nothing")
+    checkpoint_with_pending_ids_then_kill(work_dir, log_path)
+    offset = len(bu.read_log(log_path))
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            bu.wait_until(lambda: stale_repairs_since(log_path, offset) >= 1 and background_idle(conn),
+                          timeout_s=60, interval_s=0.2)
+            check("the first restart repairs the frame's ids once", stale_repairs_since(log_path, offset) == 1,
+                  f"{stale_repairs_since(log_path, offset)} repair line(s)")
+            check("the first restart's index answers exactly like a scan", stale_index_agrees_with_scan(conn))
+    finally:
+        bu.stop_server(proc)
+    check("the clean stop after the repair rewrote the log without the PENDING frame",
+          pending_frames(work_dir, STALE_DB, STALE_COLL) == 0,
+          f"{pending_frames(work_dir, STALE_DB, STALE_COLL)} frame(s)")
+    offset = len(bu.read_log(log_path))
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            bu.wait_until(lambda: background_idle(conn), timeout_s=30, interval_s=0.2)
+            time.sleep(STALE_SETTLE_S)
+            check("the second restart logs no repair of the collection", stale_repairs_since(log_path, offset) == 0,
+                  f"{stale_repairs_since(log_path, offset)} repair line(s)")
+            check("the second restart's index answers exactly like a scan", stale_index_agrees_with_scan(conn))
+    finally:
+        bu.stop_server(proc)
+
+
+def run_stale_pending_frame_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-stale-pending-")
+    log_path = os.path.join(work_dir, "server.log")
+    write_config(work_dir, faults=True)
+    test_a_pending_frame_is_not_replayed_on_every_restart(work_dir, log_path)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 CHECKPOINT_DB = "checkpoint_db"
 IDLE_CHECKPOINT_MS = 1000
 
@@ -2774,7 +2947,7 @@ def test_an_idle_log_is_checkpointed_in_the_background(conn: Conn, work_dir: str
     section(f"an idle log is checkpointed in the background (walIdleCheckpointMs={IDLE_CHECKPOINT_MS})")
     check_status("an idle collection is written",
                  conn.save({"_id": "idle", "k": "v"}, db=CHECKPOINT_DB, coll=shutdown_coll(0)), "OK")
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + (15 if bu.server_syncs_writes(conn) else 60)
     left = logs_with_records(work_dir, CHECKPOINT_DB)
     while left and time.monotonic() < deadline:
         time.sleep(0.25)
@@ -2796,6 +2969,386 @@ def run_checkpoint_phase():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_an_idle_log_is_checkpointed_in_the_background(conn, work_dir)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+FOLD_DB = "fold_db"
+FOLD_COLL = "folded"
+FOLD_DOCS = 2000
+FOLD_ROUND_STRIDE = 10_000
+FOLD_MIN_LOG_BYTES = 64 * 1024
+FOLD_QUIET_TIMEOUT_S = 15.0
+
+
+def fold_log_file(work_dir: str) -> str:
+    return os.path.join(work_dir, "db", FOLD_DB, FOLD_COLL, f"{FOLD_COLL}-n-Number.idxlog")
+
+
+def save_fold_round(conn: Conn, round_number: int) -> dict:
+    objects = [{"_id": f"f{i}", "n": round_number * FOLD_ROUND_STRIDE + i} for i in range(FOLD_DOCS)]
+    return conn.send({"type": "BULK_SAVE", "databaseName": FOLD_DB, "collectionName": FOLD_COLL, "objects": objects})
+
+
+def fold_index_equals_scan(conn: Conn, round_number: int) -> bool:
+    low = round_number * FOLD_ROUND_STRIDE + FOLD_DOCS // 2
+    steps = (bu.filter_step("n", "GREATER_THAN_EQUALS", low), bu.filter_step("n", "EQUALS", low + 7))
+    for step in steps:
+        indexed = sorted(conn.ids(FOLD_COLL, [step], db=FOLD_DB))
+        scanned = sorted(conn.ids(FOLD_COLL, FULL_SCAN + [step], db=FOLD_DB))
+        if not indexed or indexed != scanned:
+            return False
+    return len(conn.ids(FOLD_COLL, [steps[0]], db=FOLD_DB)) == FOLD_DOCS - FOLD_DOCS // 2
+
+
+def test_a_resident_index_folds_once_writes_go_quiet(conn: Conn, work_dir: str):
+    section("A resident index's log folds once its writes go quiet, not on every batch")
+    check_status("create the fold database", conn.send({"type": "CREATE_DATABASE", "databaseName": FOLD_DB}), "OK")
+    check_status("create the fold collection", conn.create_coll(FOLD_COLL, db=FOLD_DB), "OK")
+    check_status("seed the fold collection", save_fold_round(conn, 0), "OK")
+    check_status("index n", conn.create_index("n", coll=FOLD_COLL, db=FOLD_DB), "OK")
+    for round_number in (1, 2):
+        check_status(f"update every n, round {round_number}", save_fold_round(conn, round_number), "OK")
+    bu.wait_until(lambda: background_idle(conn), 30.0, interval_s=0.05)
+    log_file = fold_log_file(work_dir)
+    log_bytes = os.path.getsize(log_file) if os.path.exists(log_file) else 0
+    check("the log is past its fold threshold right after the last write", log_bytes >= FOLD_MIN_LOG_BYTES,
+          f"{log_bytes} bytes")
+    check("the log folds once the index is quiet",
+          bu.wait_until(lambda: not os.path.exists(log_file), FOLD_QUIET_TIMEOUT_S, interval_s=0.1))
+    check("the index answers what a scan does after the idle fold", fold_index_equals_scan(conn, 2))
+
+
+def test_an_index_log_left_unfolded_at_shutdown_replays_at_startup(proc, work_dir: str, log_path: str):
+    section("An index log a stop left unfolded is replayed at startup")
+    with admin_conn() as conn:
+        check_status("update every n, round 3", save_fold_round(conn, 3), "OK")
+        bu.wait_until(lambda: background_idle(conn), 30.0, interval_s=0.05)
+    bu.stop_server(proc)
+    check("the stop inside the quiet window leaves the log unfolded", os.path.exists(fold_log_file(work_dir)))
+    proc = bu.start_server(work_dir, log_path)
+    with admin_conn() as conn:
+        check("the replayed log answers what a scan does", fold_index_equals_scan(conn, 3))
+    return proc
+
+
+def run_idle_index_fold_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-idle-fold-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, maxMemory="256mb")
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            test_a_resident_index_folds_once_writes_go_quiet(conn, work_dir)
+        bu.stop_server(proc)
+        proc = None
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            check("the index answers what a scan does after a restart", fold_index_equals_scan(conn, 2))
+        proc = test_an_index_log_left_unfolded_at_shutdown_replays_at_startup(proc, work_dir, log_path)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+PLACEMENT_DB = "placement_db"
+PLACEMENT_LARGE_COLL = "large_docs"
+PLACEMENT_LARGE_DOCS = 6
+PLACEMENT_LARGE_PAD_BYTES = 700_000
+PLACEMENT_LARGE_UPDATES = 30
+SMALL_COLL = "small_hot_docs"
+SMALL_DOCS = 20
+SMALL_PAD_BYTES = 1000
+SMALL_DOC_MAX_BYTES = 1100
+SMALL_UPDATES = 3000
+SMALL_KEPT = 2
+DEFAULT_PAGE_BYTES = 2 * 1024 * 1024
+COMPACT_FLOOR_BYTES = 16 * 1024
+
+
+def placement_doc(i: int, version: int, pad_bytes: int) -> dict:
+    return {"_id": f"d{i}", "v": version, "pad": "x" * pad_bytes}
+
+
+def latest_versions(conn: Conn, coll: str, count: int) -> dict:
+    found = {}
+    for i in range(count):
+        response = conn.find(f"d{i}", db=PLACEMENT_DB, coll=coll)
+        if response.get("status") == "OK":
+            found[f"d{i}"] = (response.get("object") or {}).get("v")
+    return found
+
+
+def check_placement_reads(conn: Conn, coll: str, expected: dict, label: str):
+    check(f"{label}: FIND_BY_ID answers the last version of every document",
+          latest_versions(conn, coll, PLACEMENT_LARGE_DOCS if coll == PLACEMENT_LARGE_COLL else SMALL_DOCS) == expected)
+    scanned = sorted(bu.ids_of(conn.aggregate(coll, FULL_SCAN, db=PLACEMENT_DB)))
+    check(f"{label}: a full scan lists every document once", scanned == sorted(expected), f"scan={scanned}")
+    check(f"{label}: the index-only COUNT agrees", conn.count(coll, [], db=PLACEMENT_DB) == len(expected))
+
+
+def test_large_document_updates_keep_every_page_within_max_page_size(conn: Conn, work_dir: str) -> dict:
+    section(f"{PLACEMENT_LARGE_UPDATES} updates of {PLACEMENT_LARGE_DOCS} documents of {PLACEMENT_LARGE_PAD_BYTES // 1000} KB keep every page file"
+            f" within maxPageSize")
+    check_status("create the placement database", conn.send({"type": "CREATE_DATABASE",
+                                                              "databaseName": PLACEMENT_DB}), "OK")
+    check_status("create the large-document collection", conn.create_coll(PLACEMENT_LARGE_COLL, db=PLACEMENT_DB), "OK")
+    expected = {}
+    refused = []
+    for round_number in range(PLACEMENT_LARGE_DOCS + PLACEMENT_LARGE_UPDATES):
+        i = round_number % PLACEMENT_LARGE_DOCS
+        response = conn.save(placement_doc(i, round_number, PLACEMENT_LARGE_PAD_BYTES), db=PLACEMENT_DB, coll=PLACEMENT_LARGE_COLL)
+        if response.get("status") == "OK":
+            expected[f"d{i}"] = round_number
+        else:
+            refused.append((round_number, response.get("message")))
+    check("every large write was acknowledged", not refused, f"refused: {refused[:3]}")
+    pages = page_bytes(work_dir, PLACEMENT_LARGE_COLL, db=PLACEMENT_DB)
+    check(f"no page file grew past maxPageSize ({DEFAULT_PAGE_BYTES} bytes)",
+          all(length <= DEFAULT_PAGE_BYTES for length in pages.values()), f"pages={pages}")
+    check_placement_reads(conn, PLACEMENT_LARGE_COLL, expected, "large documents")
+    return expected
+
+
+def test_a_small_hot_collection_converges_on_disk(conn: Conn, work_dir: str) -> dict:
+    section(f"{SMALL_UPDATES} updates of a {SMALL_DOCS}-document collection keep its pages within twice its live"
+            f" bytes plus the {COMPACT_FLOOR_BYTES // 1024} KB floor")
+    check_status("create the small hot collection", conn.create_coll(SMALL_COLL, db=PLACEMENT_DB), "OK")
+    expected = {}
+    refused = []
+    rng = random.Random(28)
+    for round_number in range(SMALL_UPDATES):
+        i = round_number if round_number < SMALL_DOCS else rng.randrange(SMALL_DOCS)
+        response = conn.save(placement_doc(i, round_number, SMALL_PAD_BYTES), db=PLACEMENT_DB, coll=SMALL_COLL)
+        if response.get("status") == "OK":
+            expected[f"d{i}"] = round_number
+        else:
+            refused.append(round_number)
+    check("every small write was acknowledged", not refused, f"refused: {refused[:5]}")
+    on_disk = sum(page_bytes(work_dir, SMALL_COLL, db=PLACEMENT_DB).values())
+    bound = 2 * SMALL_DOCS * SMALL_DOC_MAX_BYTES + COMPACT_FLOOR_BYTES
+    check(f"the page files hold {on_disk} bytes, within {bound}", on_disk <= bound)
+    check_placement_reads(conn, SMALL_COLL, expected, "small hot collection")
+    deleted = [f"d{i}" for i in range(SMALL_KEPT, SMALL_DOCS)]
+    refused = [doc_id for doc_id in deleted if conn.send({
+        "type": "DELETE", "databaseName": PLACEMENT_DB, "collectionName": SMALL_COLL, "_id": doc_id
+    }).get("status") != "OK"]
+    check(f"deleting {len(deleted)} of {SMALL_DOCS} documents is acknowledged", not refused, f"refused: {refused}")
+    kept = {doc_id: version for doc_id, version in expected.items() if doc_id not in deleted}
+    on_disk = sum(page_bytes(work_dir, SMALL_COLL, db=PLACEMENT_DB).values())
+    bound = SMALL_KEPT * SMALL_DOC_MAX_BYTES + COMPACT_FLOOR_BYTES + SMALL_DOC_MAX_BYTES
+    check(f"after the deletes the page files hold {on_disk} bytes, within {bound}", on_disk <= bound)
+    check_placement_reads(conn, SMALL_COLL, kept, "after the deletes")
+    return kept
+
+
+def run_page_placement_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-placement-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, maxMemory="256mb")
+    proc = bu.start_server(work_dir, log_path, xmx="1g")
+    try:
+        with admin_conn() as conn:
+            large = test_large_document_updates_keep_every_page_within_max_page_size(conn, work_dir)
+            small = test_a_small_hot_collection_converges_on_disk(conn, work_dir)
+        bu.stop_server(proc)
+        proc = bu.start_server(work_dir, log_path, xmx="1g")
+        section("Large and small placement collections read back after a restart")
+        with admin_conn() as conn:
+            check_placement_reads(conn, PLACEMENT_LARGE_COLL, large, "large documents after a restart")
+            check_placement_reads(conn, SMALL_COLL, small, "small hot collection after a restart")
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+RELOCATION_DB = "relocation_db"
+RELOCATION_COLL = "many_pages"
+RELOCATION_DOCS = 1500
+RELOCATION_OPS = 1200
+RELOCATION_PAGE_BYTES = 4096
+
+
+def relocation_doc(i: int, value: int) -> dict:
+    return {"_id": f"rel_{i:05d}", "v": value, "cat": f"c{i % 13}", "pad": "r" * (60 + value % 5 * 40)}
+
+
+def churn_many_page_relocations(conn: Conn, expected: dict, first_op: int) -> list:
+    refused = []
+    for op in range(first_op, first_op + RELOCATION_OPS):
+        index = (op * 7919 + 13) % (RELOCATION_DOCS + first_op)
+        target = f"rel_{index:05d}"
+        if op % 5 == 4 and target in expected:
+            response = conn.send({"type": "DELETE", "databaseName": RELOCATION_DB,
+                                  "collectionName": RELOCATION_COLL, "_id": target})
+            del expected[target]
+        else:
+            doc = relocation_doc(index if op % 5 else RELOCATION_DOCS + op, op + 1)
+            response = conn.save(doc, db=RELOCATION_DB, coll=RELOCATION_COLL)
+            expected[doc["_id"]] = op + 1
+        if response.get("status") != "OK":
+            refused.append(target)
+    return refused
+
+
+def test_many_page_relocations_read_back(conn: Conn, work_dir: str, expected: dict, when: str):
+    section(f"Relocating updates over many pages read back exactly {when}")
+    wrong = [doc_id for doc_id, value in sorted(expected.items())
+             if (conn.find(doc_id, db=RELOCATION_DB, coll=RELOCATION_COLL).get("object") or {}).get("v") != value]
+    check("FIND_BY_ID answers every surviving id with its last acknowledged value", not wrong, f"wrong: {wrong[:5]}")
+    by_scan = conn.ids(RELOCATION_COLL, FULL_SCAN, db=RELOCATION_DB)
+    check("a scan returns exactly the surviving ids", by_scan == sorted(expected),
+          f"scan={len(by_scan)} expected={len(expected)} differ={sorted(set(by_scan) ^ set(expected))[:5]}")
+    check("the pk count equals the scan", conn.count_via_pk(RELOCATION_DB, RELOCATION_COLL) == len(by_scan))
+    oversized = oversized_pages(work_dir, RELOCATION_COLL, RELOCATION_PAGE_BYTES, RELOCATION_DB)
+    check("no page file grew past maxPageSize, so every placement saw the page's real length", not oversized,
+          f"oversized: {oversized}")
+    check(f"the collection spans many pages ({len(page_files(work_dir, RELOCATION_DB, RELOCATION_COLL))})",
+          len(page_files(work_dir, RELOCATION_DB, RELOCATION_COLL)) >= 30)
+    deadline = time.monotonic() + 5.0
+    while True:
+        drift = occupancy_drift(recorded_pages(work_dir, RELOCATION_DB, RELOCATION_COLL),
+                                actual_pages(work_dir, RELOCATION_DB, RELOCATION_COLL))
+        if not drift or time.monotonic() > deadline:
+            break
+        time.sleep(0.2)
+    check("every page row equals its page's live bytes and entries", not drift, "; ".join(drift[:5]))
+
+
+def run_many_page_relocation_kill_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-relocation-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, maxMemory="256mb", maxPageSize="4kb",
+                    maxEntrySize=MAX_ENTRY_SIZE)
+    proc = bu.start_server(work_dir, log_path)
+    expected = {}
+    try:
+        with admin_conn() as conn:
+            section("Relocation churn over many pages, then a kill -9 and a restart")
+            check_status("create the database", conn.send({"type": "CREATE_DATABASE",
+                                                           "databaseName": RELOCATION_DB}), "OK")
+            check_status("create the collection", conn.create_coll(RELOCATION_COLL, db=RELOCATION_DB), "OK")
+            check_status("index cat", conn.create_index("cat", coll=RELOCATION_COLL, db=RELOCATION_DB), "OK")
+            for start in range(0, RELOCATION_DOCS, 500):
+                objects = [relocation_doc(i, 0) for i in range(start, min(start + 500, RELOCATION_DOCS))]
+                check_status(f"bulk insert from {start}", conn.send({
+                    "type": "BULK_SAVE", "databaseName": RELOCATION_DB, "collectionName": RELOCATION_COLL,
+                    "objects": objects}), "OK")
+            expected.update({f"rel_{i:05d}": 0 for i in range(RELOCATION_DOCS)})
+            refused = churn_many_page_relocations(conn, expected, 0)
+            check("every churned write was acknowledged", not refused, f"refused: {refused[:5]}")
+        proc.kill()
+        proc.wait(timeout=30)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_many_page_relocations_read_back(conn, work_dir, expected, "after a kill -9")
+            refused = churn_many_page_relocations(conn, expected, RELOCATION_OPS)
+            check("churn after the restart was acknowledged", not refused, f"refused: {refused[:5]}")
+        bu.stop_server(proc)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_many_page_relocations_read_back(conn, work_dir, expected, "after more churn and a clean restart")
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+REPAIR_DB = "repair_db"
+REPAIR_COLL = "bulk_killed"
+REPAIR_FIELDS = ("cat", "n")
+REPAIR_BULK = 500
+REPAIR_STREAM_S = 4.0
+REPAIR_DEADLINE_S = 90.0
+REPAIRED_LINE = f"Repaired the field indexes of {REPAIR_DB}|{REPAIR_COLL} for "
+
+
+def stream_bulk_saves_until_killed(proc) -> int:
+    acknowledged = [0]
+    stop = threading.Event()
+
+    def stream():
+        try:
+            with admin_conn() as writer:
+                start = 0
+                while not stop.is_set():
+                    response = writer.send({"type": "BULK_SAVE", "databaseName": REPAIR_DB,
+                                            "collectionName": REPAIR_COLL,
+                                            "objects": [{"_id": f"b{i:07d}", "cat": f"c{i % 37}", "n": i % 101}
+                                                        for i in range(start, start + REPAIR_BULK)]})
+                    if response.get("status") != "OK":
+                        return
+                    acknowledged[0] = start + REPAIR_BULK
+                    start += REPAIR_BULK
+        except OSError:
+            return
+
+    writer_thread = threading.Thread(target=stream, daemon=True)
+    writer_thread.start()
+    time.sleep(REPAIR_STREAM_S)
+    proc.kill()
+    proc.wait(timeout=30)
+    stop.set()
+    writer_thread.join(timeout=30)
+    return acknowledged[0]
+
+
+def wait_for_the_repair(conn: Conn, log_path: str, offset: int, started: float) -> float:
+    while time.monotonic() - started < REPAIR_DEADLINE_S:
+        background = conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("background", {})
+        idle = background.get("maintenance", 1) == 0 and background.get("pending", 1) == 0
+        if idle and REPAIRED_LINE in bu.read_log(log_path)[offset:]:
+            return time.monotonic() - started
+        time.sleep(0.2)
+    return -1.0
+
+
+def test_kill_during_bulk_repairs_each_index_once(work_dir: str, log_path: str, acknowledged: int):
+    section(f"a kill -9 inside a BULK_SAVE stream is repaired by one pass per collection within "
+            f"{REPAIR_DEADLINE_S:.0f}s, and every index answers like a scan")
+    check(f"the stream acknowledged documents before the kill ({acknowledged})", acknowledged > 0)
+    offset = len(bu.read_log(log_path))
+    started = time.monotonic()
+    proc = bu.start_server(work_dir, log_path, xmx="1g")
+    with admin_conn() as conn:
+        elapsed = wait_for_the_repair(conn, log_path, offset, started)
+        check(f"the repair finished within {REPAIR_DEADLINE_S:.0f}s of the restart", elapsed >= 0,
+              "no repair line, or background work still queued")
+        restarted_log = bu.read_log(log_path)[offset:]
+        repaired = [line for line in restarted_log.splitlines() if REPAIRED_LINE in line]
+        print(f"    (restart to repaired: {elapsed:.1f}s; {repaired[-1] if repaired else 'no repair line'})")
+        passes = len(repaired)
+        check("the replayed ids were repaired by exactly one pass", passes == 1, f"{passes} passes")
+        stored = conn.count(REPAIR_COLL, FULL_SCAN, db=REPAIR_DB)
+        check(f"every acknowledged document survived ({stored} >= {acknowledged})", stored >= acknowledged)
+        mismatched = []
+        for field, values in (("cat", ("c0", "c5", "c36")), ("n", (0, 7, 100))):
+            for value in values:
+                equals = [bu.filter_step(field, "EQUALS", value)]
+                by_index = sorted(conn.ids(REPAIR_COLL, equals, db=REPAIR_DB))
+                by_scan = sorted(conn.ids(REPAIR_COLL, FULL_SCAN + equals, db=REPAIR_DB))
+                counted = conn.count(REPAIR_COLL, equals, db=REPAIR_DB)
+                if by_index != by_scan or not by_scan or counted != len(by_scan):
+                    mismatched.append((field, value, len(by_index), len(by_scan), counted))
+        check("every index answers and counts exactly what a scan answers", not mismatched, str(mismatched))
+    return proc
+
+
+def run_kill_during_bulk_repair_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-bulk-repair-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, maxMemory="64mb")
+    print(f"\n  Starting server on {HOST}:{PORT} for a kill -9 inside a BULK_SAVE stream ...")
+    proc = bu.start_server(work_dir, log_path, xmx="1g")
+    try:
+        with admin_conn() as conn:
+            check_status("create the repair database",
+                         conn.send({"type": "CREATE_DATABASE", "databaseName": REPAIR_DB}), "OK")
+            check_status("create the repair collection", conn.create_coll(REPAIR_COLL, db=REPAIR_DB), "OK")
+            for field in REPAIR_FIELDS:
+                check_status(f"index {field}", conn.create_index(field, coll=REPAIR_COLL, db=REPAIR_DB), "OK")
+        acknowledged = stream_bulk_saves_until_killed(proc)
+        proc = test_kill_during_bulk_repairs_each_index_once(work_dir, log_path, acknowledged)
     finally:
         bu.stop_server(proc)
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -2876,6 +3429,7 @@ def main():
             seed_drops_a_kill_will_interrupt(conn, work_dir)
             seed_a_collection_its_database_will_stop_listing(conn)
             seed_a_database_whose_collection_will_be_a_symlink(conn)
+            test_a_fenced_commit_finishes_once_the_fault_clears(conn, work_dir)
             interrupted = admin_conn()
             arrange_a_killed_commit_with_repeated_ids(interrupted, work_dir)
 
@@ -2994,7 +3548,13 @@ def main():
         run_backlog_phase()
         run_bounded_shutdown_phase()
         run_reindex_kill_phase()
+        run_pending_frame_phase()
+        run_stale_pending_frame_phase()
         run_checkpoint_phase()
+        run_idle_index_fold_phase()
+        run_page_placement_phase()
+        run_many_page_relocation_kill_phase()
+        run_kill_during_bulk_repair_phase()
     finally:
         bu.stop_server(proc)
 

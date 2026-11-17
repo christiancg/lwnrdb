@@ -18,12 +18,16 @@ import org.techhouse.ex.CollectionBusyException;
  * {@code FileSystem}, never the other way around, or the two tiers deadlock.
  */
 public class ResourceLocking {
-    private static final Map<String, ReentrantReadWriteLock> locks = new ConcurrentHashMap<>();
+    private static final Map<String, ReadTrackingLock> locks = new ConcurrentHashMap<>();
     private static final SettleGates gates = new SettleGates();
     private static final long NO_DEADLINE = Long.MAX_VALUE;
 
-    private ReentrantReadWriteLock lockFor(String lockName) {
-        return locks.computeIfAbsent(lockName, _ -> new ReentrantReadWriteLock());
+    public static void useDeferredApplyHook(DeferredApplyHook hook) {
+        DeferredApplyGate.use(hook);
+    }
+
+    private ReadTrackingLock lockFor(String lockName) {
+        return locks.computeIfAbsent(lockName, _ -> new ReadTrackingLock());
     }
 
     private enum Mode {
@@ -64,12 +68,43 @@ public class ResourceLocking {
                 return false;
             }
             if (isStillMapped(lockName, lock, mode)) {
-                return passesGate(lockName, lock, mode);
+                return passesGate(lockName, lock, mode) && granted(lockName, lock, mode);
             }
         }
     }
 
+    private static boolean granted(String lockName, ReadTrackingLock lock, Mode mode) {
+        if (mode == Mode.READ) {
+            lock.longReadGranted();
+        }
+        if (mode == Mode.WRITE && lock.getWriteHoldCount() == 1) {
+            DeferredApplyGate.applyQuietly(lockName);
+        }
+        return true;
+    }
+
+    private void applyDeferredWritesBeforeReading(String lockName, long deadlineMillis) throws InterruptedException {
+        if (expired(deadlineMillis) || DeferredApplyGate.applied(lockName)) {
+            return;
+        }
+        final var held = locks.get(lockName);
+        if (held != null && (held.getReadHoldCount() > 0 || held.isWriteLockedByCurrentThread())) {
+            return;
+        }
+        final var bound = System.currentTimeMillis() + Globals.DEFERRED_APPLY_LOCK_WAIT_MS;
+        if (tryAcquireBy(lockName, Mode.WRITE, Math.min(deadlineMillis, bound))) {
+            releaseWrite(lockName);
+        }
+    }
+
+    private static boolean bargesForPoint(ReadTrackingLock lock, Mode mode) {
+        return mode == Mode.POINT && lock.bargeForPoint();
+    }
+
     private boolean tryAcquireBy(String lockName, Mode mode, long deadlineMillis) throws InterruptedException {
+        if (mode != Mode.WRITE) {
+            applyDeferredWritesBeforeReading(lockName, deadlineMillis);
+        }
         while (true) {
             final var gate = gateFor(lockName, mode);
             if (gate != null) {
@@ -79,6 +114,12 @@ public class ResourceLocking {
                 continue;
             }
             final var lock = lockFor(lockName);
+            if (bargesForPoint(lock, mode)) {
+                if (isStillMapped(lockName, lock, mode) && passesGate(lockName, lock, mode)) {
+                    return true;
+                }
+                continue;
+            }
             if (deadlineMillis == NO_DEADLINE) {
                 side(lock, mode).lockInterruptibly();
             } else if (!side(lock, mode).tryLock(Math.max(deadlineMillis - System.currentTimeMillis(), 0),
@@ -86,7 +127,7 @@ public class ResourceLocking {
                 return false;
             }
             if (isStillMapped(lockName, lock, mode) && passesGate(lockName, lock, mode)) {
-                return true;
+                return granted(lockName, lock, mode);
             }
         }
     }
@@ -94,7 +135,8 @@ public class ResourceLocking {
     public SettleWindow openSettleWindow(String dbName, String collName) {
         final var lockName = Cache.getCollectionIdentifier(dbName, collName);
         final var lock = locks.get(lockName);
-        if (lock == null || !lock.isWriteLockedByCurrentThread() || lock.getWriteHoldCount() != 1) {
+        if (lock == null || !lock.isWriteLockedByCurrentThread() || lock.getWriteHoldCount() != 1
+                || lock.getReadHoldCount() != 0) {
             return SettleWindow.exclusive();
         }
         final var gate = gates.open(lockName);
@@ -123,7 +165,35 @@ public class ResourceLocking {
         if (dirtyRead) {
             return List.of();
         }
-        return tryAcquireBy(collectionId, Mode.POINT, deadlineFor(timeoutMillis)) ? List.of(collectionId) : null;
+        return acquireForRequest(collectionId, Mode.POINT, deadlineFor(timeoutMillis)) ? List.of(collectionId) : null;
+    }
+
+    private boolean acquireForRequest(String lockName, Mode mode, long deadlineMillis) throws InterruptedException {
+        while (true) {
+            final var slice = Math.min(deadlineMillis, System.currentTimeMillis() + Globals.FENCE_RECHECK_MS);
+            if (tryAcquireBy(lockName, mode, slice)) {
+                if (DeferredApplyGate.applied(lockName)) {
+                    return true;
+                }
+                releaseRequestRead(lockName, mode);
+                return false;
+            }
+            if (CollectionFences.contains(lockName) || expired(deadlineMillis)) {
+                return false;
+            }
+        }
+    }
+
+    private void releaseRequestRead(String lockName, Mode mode) {
+        if (mode == Mode.POINT) {
+            releasePointReadLocks(List.of(lockName));
+        } else {
+            releaseReadByName(lockName);
+        }
+    }
+
+    public boolean deferredWritesPending(Collection<String> lockNames) {
+        return DeferredApplyGate.anyPending(lockNames);
     }
 
     private static long deadlineFor(long timeoutMillis) {
@@ -151,9 +221,25 @@ public class ResourceLocking {
         final var lock = locks.get(lockName);
         if (lock != null && lock.isWriteLockedByCurrentThread()) {
             lock.writeLock().unlock();
+            if (!lock.isWriteLockedByCurrentThread()) {
+                CollectionFences.remove(lockName);
+            }
             return true;
         }
         return false;
+    }
+
+    public void fence(Collection<String> collectionIds) {
+        for (final var collId : collectionIds) {
+            final var lock = locks.get(collId);
+            if (lock != null && lock.isWriteLockedByCurrentThread()) {
+                CollectionFences.add(collId);
+            }
+        }
+    }
+
+    public boolean fences(Collection<String> collectionIds) {
+        return CollectionFences.any(collectionIds);
     }
 
     public void lockReadByName(String lockName) throws InterruptedException {
@@ -163,8 +249,23 @@ public class ResourceLocking {
     public void releaseReadByName(String lockName) {
         final var lock = locks.get(lockName);
         if (lock != null && lock.getReadHoldCount() > 0) {
+            lock.longReadReleased();
             lock.readLock().unlock();
         }
+    }
+
+    public void releasePointReadLocks(List<String> acquired) {
+        for (final var lockName : acquired) {
+            final var lock = locks.get(lockName);
+            if (lock != null && lock.getReadHoldCount() > 0) {
+                lock.readLock().unlock();
+            }
+        }
+    }
+
+    public int longReaders(String lockName) {
+        final var lock = locks.get(lockName);
+        return lock == null ? 0 : lock.longReaders();
     }
 
     public void lock(String dbName, String collName) throws InterruptedException {
@@ -225,15 +326,14 @@ public class ResourceLocking {
         try {
             for (final var collId : new TreeSet<>(collectionIds)) {
                 if (expired(deadline) || !tryAcquireBy(collId, Mode.WRITE, deadline)) {
-                    releaseWriteLocks(acquired);
                     throw new CollectionBusyException(collId, timeoutMillis);
                 }
                 acquired.add(collId);
             }
             return acquired;
-        } catch (InterruptedException e) {
+        } catch (InterruptedException | RuntimeException | Error failure) {
             releaseWriteLocks(acquired);
-            throw e;
+            throw failure;
         }
     }
 
@@ -290,15 +390,15 @@ public class ResourceLocking {
         final var deadline = deadlineFor(timeoutMillis);
         try {
             for (var identifier : sorted) {
-                if (expired(deadline) || !tryAcquireBy(identifier, Mode.READ, deadline)) {
+                if (expired(deadline) || !acquireForRequest(identifier, Mode.READ, deadline)) {
                     releaseReadLocks(acquired);
                     return null;
                 }
                 acquired.add(identifier);
             }
-        } catch (InterruptedException e) {
+        } catch (InterruptedException | RuntimeException | Error failure) {
             releaseReadLocks(acquired);
-            throw e;
+            throw failure;
         }
         return acquired;
     }
@@ -321,6 +421,11 @@ public class ResourceLocking {
         return tryAcquireNow(getIndexIdentifier(dbName, collName, fieldName), Mode.WRITE);
     }
 
+    public boolean tryLockIndex(String dbName, String collName, String fieldName, long timeoutMillis)
+            throws InterruptedException {
+        return tryAcquireWithin(getIndexIdentifier(dbName, collName, fieldName), Mode.WRITE, timeoutMillis);
+    }
+
     public boolean tryLockIndexRead(String dbName, String collName, String fieldName) {
         return tryAcquireNow(getIndexIdentifier(dbName, collName, fieldName), Mode.READ);
     }
@@ -340,6 +445,10 @@ public class ResourceLocking {
 
     public void releaseIndexRead(String dbName, String collName, String fieldName) {
         releaseReadByName(getIndexIdentifier(dbName, collName, fieldName));
+    }
+
+    public void removeCollectionLock(String dbName, String collName) {
+        evictIfUnused(Cache.getCollectionIdentifier(dbName, collName));
     }
 
     public void removeLock(String dbName, String collName) {
@@ -374,7 +483,7 @@ public class ResourceLocking {
     }
 
     private static void evictIfUnused(String key) {
-        final var retired = new ReentrantReadWriteLock[1];
+        final var retired = new ReadTrackingLock[1];
         locks.computeIfPresent(key, (_, lock) -> {
             if (lock.isWriteLocked() || lock.hasQueuedThreads() || !lock.writeLock().tryLock()) {
                 return lock;

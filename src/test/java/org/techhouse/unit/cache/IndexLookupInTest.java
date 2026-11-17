@@ -1,5 +1,6 @@
 package org.techhouse.unit.cache;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -86,7 +87,9 @@ public class IndexLookupInTest {
         when(cache.getFieldIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any())).thenReturn(null);
         when(cache.getHashIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any(IndexKind.class)))
                 .thenReturn(null);
+        when(cache.residentFieldIndex(any(), any(), any())).thenReturn(null);
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(idx);
+        when(cache.pkCountForCoverage(dbName, collName)).thenReturn(2);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
 
         final var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr);
@@ -111,6 +114,7 @@ public class IndexLookupInTest {
         when(cache.getFieldIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any())).thenReturn(null);
         when(cache.getHashIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any(IndexKind.class)))
                 .thenReturn(null);
+        when(cache.residentFieldIndex(any(), any(), any())).thenReturn(null);
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(idx);
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class)).thenReturn(List.of());
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
@@ -144,5 +148,40 @@ public class IndexLookupInTest {
         assertTrue(result.contains("id1"));
         assertTrue(result.contains("id2"));
         assertFalse(result.contains("id3"));
+    }
+
+    @Test
+    public void complementCoverageBySizeSum() throws IOException {
+        final var cache = mock(UserCache.class);
+        injectRealLocking(cache);
+        final var dbName = "db";
+        final var collName = "coll";
+        final var fieldName = "score";
+        final var arr = new JsonArray();
+        arr.add(new JsonNumber("10"));
+        final var notIn = new FieldOperator(FieldOperatorType.NOT_IN, fieldName, arr);
+        final var notEquals = new FieldOperator(FieldOperatorType.NOT_EQUALS, fieldName, new JsonNumber("10"));
+        final List<FieldIndexEntry<Number>> idx = List.of(
+                new FieldIndexEntry<>(dbName, collName, 10.0, Set.of("id1", "id3")),
+                new FieldIndexEntry<>(dbName, collName, 30.0, Set.of("id2")));
+        when(cache.getFieldIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any())).thenReturn(null);
+        when(cache.getHashIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any(IndexKind.class)))
+                .thenReturn(null);
+        when(cache.residentFieldIndex(any(), any(), any())).thenReturn(null);
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(idx);
+        when(cache.getIdsFromIndex(eq(dbName), eq(collName), eq(fieldName), any(), any())).thenCallRealMethod();
+
+        when(cache.pkCountForCoverage(dbName, collName)).thenReturn(3);
+        assertEquals(Set.of("id2"), cache.getIdsFromIndex(dbName, collName, fieldName, notIn, arr));
+        assertEquals(Set.of("id2"), cache.getIdsFromIndex(dbName, collName, fieldName, notEquals, 10.0));
+
+        when(cache.pkCountForCoverage(dbName, collName)).thenReturn(4);
+        assertNull(cache.getIdsFromIndex(dbName, collName, fieldName, notIn, arr),
+                "a document the index does not hold may carry a null, which NOT_IN matches");
+        when(cache.pkCountForCoverage(dbName, collName)).thenReturn(UserCache.UNKNOWN_COUNT);
+        assertNull(cache.getIdsFromIndex(dbName, collName, fieldName, notEquals, 10.0));
+        when(cache.pkCountForCoverage(dbName, collName)).thenReturn(2);
+        assertNull(cache.getIdsFromIndex(dbName, collName, fieldName, notEquals, 10.0),
+                "more indexed ids than documents is drift, never coverage");
     }
 }

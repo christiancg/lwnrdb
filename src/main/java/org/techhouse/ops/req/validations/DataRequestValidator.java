@@ -16,6 +16,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.utils.JsonUtils;
 
 public final class DataRequestValidator {
@@ -35,10 +36,30 @@ public final class DataRequestValidator {
         if (request.getObject() == null) {
             return ValidationResult.fail("SAVE request requires an object");
         }
+        if (request.getCondition() != null) {
+            return validateConditionalSave(request);
+        }
         if (request.get_id() != null && !NameValidations.isId(request.get_id())) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return validateDocument(request.getObject());
+    }
+
+    private static ValidationResult validateConditionalSave(SaveRequest request) {
+        if (request.isFailOnUpdate()) {
+            return ValidationResult.fail("SAVE with a condition cannot take failOnUpdate");
+        }
+        if (request.get_id() != null || request.getObject().has(Globals.PK_FIELD)) {
+            return ValidationResult.fail("SAVE takes either an _id or a condition, not both");
+        }
+        if (request.getObject().isEmpty()) {
+            return ValidationResult.fail("SAVE with a condition requires at least one field to set");
+        }
+        final var document = validateDocument(request.getObject());
+        if (!document.isValid()) {
+            return document;
+        }
+        return AggregationStepValidator.validate(new FilterAggregationStep(request.getCondition()));
     }
 
     private static ValidationResult validateDocument(JsonObject object) {
@@ -101,8 +122,14 @@ public final class DataRequestValidator {
         if (!base.isValid()) {
             return base;
         }
+        if (request.get_id() != null && request.getCondition() != null) {
+            return ValidationResult.fail("DELETE takes either an _id or a condition, not both");
+        }
+        if (request.getCondition() != null) {
+            return AggregationStepValidator.validate(new FilterAggregationStep(request.getCondition()));
+        }
         if (request.get_id() == null) {
-            return ValidationResult.fail("DELETE request requires an _id");
+            return ValidationResult.fail("DELETE request requires an _id or a condition");
         }
         if (!NameValidations.isId(request.get_id())) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
@@ -140,14 +167,40 @@ public final class DataRequestValidator {
         if (!base.isValid()) {
             return base;
         }
-        if (request.getFieldName() == null || request.getFieldName().isBlank()) {
-            return ValidationResult.fail("CREATE_INDEX request requires a non-blank fieldName");
+        final var fieldNames = request.getFieldNames();
+        if (fieldNames == null) {
+            if (request.getFieldName() == null || request.getFieldName().isBlank()) {
+                return ValidationResult.fail("CREATE_INDEX request requires a non-blank fieldName or fieldNames");
+            }
+            return validateCreateIndexField(request.getFieldName());
         }
-        final var charset = NameValidations.validateIndexFieldName(request.getFieldName());
+        if (fieldNames.isEmpty()) {
+            return ValidationResult.fail("CREATE_INDEX fieldNames must not be empty");
+        }
+        if (request.getFieldName() != null) {
+            final var single = validateCreateIndexField(request.getFieldName());
+            if (!single.isValid()) {
+                return single;
+            }
+        }
+        for (final var fieldName : fieldNames) {
+            final var field = validateCreateIndexField(fieldName);
+            if (!field.isValid()) {
+                return field;
+            }
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateCreateIndexField(String fieldName) {
+        if (fieldName == null || fieldName.isBlank()) {
+            return ValidationResult.fail("CREATE_INDEX field names must not be blank");
+        }
+        final var charset = NameValidations.validateIndexFieldName(fieldName);
         if (!charset.isValid()) {
             return charset;
         }
-        return validateIndexFieldNotReserved("CREATE_INDEX", request.getFieldName());
+        return validateIndexFieldNotReserved("CREATE_INDEX", fieldName);
     }
 
     private static ValidationResult validateIndexFieldNotReserved(String operation, String fieldName) {

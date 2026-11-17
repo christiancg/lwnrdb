@@ -63,10 +63,11 @@ public class CertificateExpiryTest {
     @Test
     public void test_a_near_expiry_cert_warns() throws Exception {
         final var keyStore = keyStoreExpiringAt(Instant.now().plus(Duration.ofDays(3)));
+        final var keystorePath = Path.of("certs", "lwnrdb.p12");
         try (var logWriter = mockStatic(LogWriter.class)) {
-            CertificateExpiry.warnIfExpiringSoon(keyStore, Path.of("certs/lwnrdb.p12"));
+            CertificateExpiry.warnIfExpiringSoon(keyStore, keystorePath);
             logWriter.verify(() -> LogWriter.writeLogEntry(argThat(entry -> entry.contains("SECURITY WARNING")
-                    && entry.contains("'soon' expires at") && entry.contains("certs/lwnrdb.p12"))));
+                    && entry.contains("'soon' expires at") && entry.contains(keystorePath.toString()))));
         }
     }
 

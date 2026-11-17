@@ -16,6 +16,7 @@ import java.util.TreeSet;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.techhouse.analyze.AnalyzeResult;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -29,6 +30,7 @@ import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CallProcedureResponse;
 import org.techhouse.ops.resp.CancelScriptResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
@@ -46,6 +48,7 @@ import org.techhouse.ops.resp.ListenEndedResponse;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.PrimaryKeyReindexResponse;
+import org.techhouse.ops.resp.ReadSnapshotResponse;
 import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.ResolveTriggerRunResponse;
 import org.techhouse.ops.resp.RunScriptResponse;
@@ -54,6 +57,9 @@ import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SaveScheduleResponse;
 import org.techhouse.ops.resp.SaveSchemaResponse;
 import org.techhouse.ops.resp.SaveTriggerResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
+import org.techhouse.ops.resp.ServerInfoResponse;
+import org.techhouse.ops.resp.StartSnapshotResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 import org.techhouse.ops.resp.StopListenResponse;
 import org.techhouse.ops.resp.TestTriggerResponse;
@@ -100,23 +106,26 @@ public class ResponseBytesTest {
                 new CallProcedureResponse("ok", doc, logs, false, "run-1"),
                 new CallProcedureResponse("failed", ErrorCode.ERROR_RETRIEVING, logs, true, "run-2", List.of("at x")),
                 new CancelScriptResponse("ok", true), new CloseConnectionResponse(), new DeleteResponse("ok"),
-                new FindByIdResponse("ok", doc), new FindByIdResponse("ok", null),
-                new GetDatabaseStatsResponse("ok", doc), new GetSchemaResponse("ok", doc),
-                new ListCollectionsResponse("ok", List.of("c1", "c2")), new ListDatabasesResponse("ok", List.of("db1")),
-                new ListProceduresResponse("ok", rows), new ListSchedulesResponse("ok", rows),
-                new ListScriptsResponse("ok", rows), new ListTransactionsResponse("ok", rows),
-                new ListTriggerRunsResponse("ok", rows), new ListTriggersResponse("ok", rows),
-                new ListUsersResponse("ok", rows), new ListenEndedResponse("listen-1", "collection dropped"),
+                new DeleteManyResponse(42L), new SaveWhereResponse(42L), new FindByIdResponse("ok", doc),
+                new FindByIdResponse("ok", null), new GetDatabaseStatsResponse("ok", doc),
+                new GetSchemaResponse("ok", doc), new ListCollectionsResponse("ok", List.of("c1", "c2")),
+                new ListDatabasesResponse("ok", List.of("db1")), new ListProceduresResponse("ok", rows),
+                new ListSchedulesResponse("ok", rows), new ListScriptsResponse("ok", rows),
+                new ListTransactionsResponse("ok", rows), new ListTriggerRunsResponse("ok", rows),
+                new ListTriggersResponse("ok", rows), new ListUsersResponse("ok", rows),
+                new ListenEndedResponse("listen-1", "collection dropped"),
                 new ListenResponse("listen-1", rows, "hash", true), new ListenResponse("listen-2", rows, "h", false),
                 new PrimaryKeyReindexResponse("ok", List.of("f"),
                         new PkRebuild(List.of(), 2, true, List.of(), List.of())),
                 new ReindexResponse("ok", List.of("f", "g")), new ResolveTriggerRunResponse("ok", false),
-                new RunScriptResponse("ok", doc, logs, true, "run-3"),
+                new ServerInfoResponse("ok", doc), new RunScriptResponse("ok", doc, logs, true, "run-3"),
                 new RunScriptResponse("failed", ErrorCode.ERROR_RETRIEVING, logs, false, "run-4"),
                 new SaveProcedureResponse("ok", 3L), new SaveResponse("ok", "doc-1", true),
                 new SaveScheduleResponse("ok", 5L), new SaveSchemaResponse("ok", List.of("warning 界")),
                 new SaveTriggerResponse("ok", 4L, "alice"), new StartTransactionResponse("ok", "tx-1"),
-                new StopListenResponse(),
+                new StartSnapshotResponse("ok", "snap-1", List.of("c1", "界")),
+                new ReadSnapshotResponse("ok", rows, "doc-2", false),
+                new ReadSnapshotResponse("ok", List.of(), null, true), new StopListenResponse(),
                 new TestTriggerResponse("ok", "ALLOW", doc, "because", logs, false, List.of("at y")));
     }
 
@@ -141,7 +150,7 @@ public class ResponseBytesTest {
         final var queue = TestUtils.inlineOutbound(queued);
         for (final var response : fixture()) {
             writer.write(eJson.toJson(response));
-            writer.newLine();
+            writer.write(Globals.NEWLINE);
             queue.offer(OutboundQueue.frameOf(response));
         }
         writer.flush();

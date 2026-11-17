@@ -25,17 +25,12 @@ public final class RegexExec {
     public static final String EXEC = "exec";
 
     public static JsValue builtinExec(JsValue target, JsRegExp state, String input, InterpreterOps ops) {
-        final var global = state.isGlobal();
-        final var sticky = state.isSticky();
-        final var stateful = global || sticky;
-        final var read = toLength(readLastIndex(target, ops), ops);
-        final var lastIndex = stateful ? read : 0;
-        if (lastIndex > input.length()) {
-            writeLastIndex(target, 0, ops);
+        final var stateful = state.isGlobal() || state.isSticky();
+        final var start = startIndex(target, stateful, input, ops);
+        if (start < 0) {
             return JsNull.getInstance();
         }
-        final var start = (int) lastIndex;
-        final var matcher = RegexMatcher.exec(state.getProgram(), input, start, sticky, budgetFor(ops));
+        final var matcher = RegexMatcher.exec(state.getProgram(), input, start, state.isSticky(), budgetFor(ops));
         if (matcher == null) {
             resetLastIndex(target, stateful, ops);
             return JsNull.getInstance();
@@ -48,6 +43,33 @@ public final class RegexExec {
             addIndices(result, matcher, state);
         }
         return result;
+    }
+
+    public static boolean builtinTest(JsValue target, JsRegExp state, String input, InterpreterOps ops) {
+        final var stateful = state.isGlobal() || state.isSticky();
+        final var start = startIndex(target, stateful, input, ops);
+        if (start < 0) {
+            return false;
+        }
+        final var end = RegexMatcher.matchEnd(state.getProgram(), input, start, state.isSticky(), budgetFor(ops));
+        if (end < 0) {
+            resetLastIndex(target, stateful, ops);
+            return false;
+        }
+        if (stateful) {
+            writeLastIndex(target, end, ops);
+        }
+        return true;
+    }
+
+    private static int startIndex(JsValue target, boolean stateful, String input, InterpreterOps ops) {
+        final var read = toLength(readLastIndex(target, ops), ops);
+        final var lastIndex = stateful ? read : 0;
+        if (lastIndex > input.length()) {
+            writeLastIndex(target, 0, ops);
+            return -1;
+        }
+        return (int) lastIndex;
     }
 
     public static JsValue readLastIndex(JsValue target, InterpreterOps ops) {
@@ -161,19 +183,36 @@ public final class RegexExec {
         return execStep(rx, s, ops).result();
     }
 
-    public static ExecStep execStep(JsValue rx, String s, InterpreterOps ops) {
+    public static boolean regExpTest(JsValue rx, String s, InterpreterOps ops) {
         final var execFn = ops.getMember(rx, new JsString(EXEC));
+        if (rx instanceof JsRegExp regexp && isBuiltinExec(execFn)) {
+            ops.tick();
+            ops.tick();
+            return builtinTest(rx, regexp, s, ops);
+        }
+        return !(execStep(rx, execFn, s, ops).result() instanceof JsNull);
+    }
+
+    public static ExecStep execStep(JsValue rx, String s, InterpreterOps ops) {
+        return execStep(rx, ops.getMember(rx, new JsString(EXEC)), s, ops);
+    }
+
+    private static ExecStep execStep(JsValue rx, JsValue execFn, String s, InterpreterOps ops) {
         if (isCallable(execFn)) {
             final var result = ops.call(execFn, rx, List.of(new JsString(s)));
             if (!(result instanceof JsObject) && !(result instanceof JsArray) && !(result instanceof JsNull)) {
                 throw new TypeErrorException("RegExp exec method returned something other than an object or null");
             }
-            return new ExecStep(result, execFn instanceof JsNativeFunction function && EXEC.equals(function.getName()));
+            return new ExecStep(result, isBuiltinExec(execFn));
         }
         if (rx instanceof JsRegExp regexp) {
             return new ExecStep(builtinExec(rx, regexp, s, ops), true);
         }
         throw new TypeErrorException("RegExp.prototype.exec method is not generic");
+    }
+
+    private static boolean isBuiltinExec(JsValue execFn) {
+        return execFn instanceof JsNativeFunction function && EXEC.equals(function.getName());
     }
 
     public record ExecStep(JsValue result, boolean builtin) {

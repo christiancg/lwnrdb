@@ -16,7 +16,6 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.PkRebuildRefusedException;
 
@@ -107,7 +106,7 @@ public class PkIndexRebuildTest {
 
         final var rebuild = rebuild();
 
-        assertEquals(List.of("b"), rebuild.appeared().stream().map(DbEntry::get_id).toList());
+        assertEquals(List.of("b"), rebuild.appeared().stream().map(PkIndexEntry::getValue).toList());
         assertEquals(1, rebuild.unversioned());
         assertEquals(0L, f.indexed("b").getVersion());
         assertTrue(f.everyRowReadsItsOwnRecord());

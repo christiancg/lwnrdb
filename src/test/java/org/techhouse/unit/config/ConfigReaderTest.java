@@ -52,6 +52,7 @@ public class ConfigReaderTest {
         expectedConfig.put("authFailureDelayBaseMs", "250");
         expectedConfig.put("authFailureDelayMaxMs", "30000");
         expectedConfig.put("maxConcurrentPasswordChecks", "0");
+        expectedConfig.put("authVerifierCacheEnabled", "true");
         expectedConfig.put("filePath", "db");
         expectedConfig.put("backgroundProcessingThreads", "10");
         expectedConfig.put("logPath", "logs");
@@ -68,7 +69,7 @@ public class ConfigReaderTest {
         expectedConfig.put("schemaPatternCacheMaxBytes", "32Mb");
         expectedConfig.put("defaultAdminUsername", "admin");
         expectedConfig.put("defaultAdminPassword", "");
-        expectedConfig.put("maxMemory", "512mb");
+        expectedConfig.put("maxMemory", "auto");
         expectedConfig.put("transactionLockTimeoutMs", "5000");
         expectedConfig.put("tlsEnabled", "false");
         expectedConfig.put("tlsKeystorePath", "certs/lwnrdb.p12");
@@ -77,6 +78,9 @@ public class ConfigReaderTest {
         expectedConfig.put("clusterPort", "9990");
         expectedConfig.put("clusterBindAddress", "0.0.0.0");
         expectedConfig.put("bindAddress", "");
+        expectedConfig.put("metricsPort", "0");
+        expectedConfig.put("metricsBindAddress", "127.0.0.1");
+        expectedConfig.put("metricsToken", "");
         expectedConfig.put("clusterAdvertisedAddress", "127.0.0.1");
         expectedConfig.put("clusterSeeds", "");
         expectedConfig.put("nodeId", "");
@@ -131,7 +135,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptRunHistoryIncludeLogs", "false");
         expectedConfig.put("scriptRunHistoryMaxErrorChars", "2000");
         expectedConfig.put("scriptRunHistoryMaxQueued", "10000");
-        expectedConfig.put("scriptRunHistoryMaxRows", "0");
+        expectedConfig.put("scriptRunHistoryMaxRows", "100000");
         expectedConfig.put("scriptRunHistorySweepMs", "3600000");
         expectedConfig.put("scriptFetchEnabled", "true");
         expectedConfig.put("scriptFetchAllowlist", "*");
@@ -156,6 +160,8 @@ public class ConfigReaderTest {
         expectedConfig.put("shutdownTimeoutMs", "15000");
         expectedConfig.put("maxRequestSize", "64Mb");
         expectedConfig.put("clientOutboundQueueMaxBytes", "16Mb");
+        expectedConfig.put("maxUnsentResponseBytes", "0");
+        expectedConfig.put("clientWriteStallTimeoutMs", "30000");
         expectedConfig.put("authTimeoutMs", "10000");
         expectedConfig.put("transactionIdleTimeoutMs", "30000");
         expectedConfig.put("triggerRunLogEnabled", "true");
@@ -164,6 +170,7 @@ public class ConfigReaderTest {
         expectedConfig.put("triggerRetryBackoffMs", "1000");
         expectedConfig.put("triggerRetryMaxBackoffMs", "60000");
         expectedConfig.put("triggerDeadLetterRetentionMs", "604800000");
+        expectedConfig.put("triggerDeadLetterMaxRuns", "10000");
         expectedConfig.put("beforeHookInstructionBudget", "200000");
         expectedConfig.put("beforeHookTimeoutMs", "200");
         expectedConfig.put("schedulesEnabled", "true");
@@ -176,6 +183,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scheduleMaxTotalPerUser", "500");
         expectedConfig.put("scheduleMinIntervalMs", "1000");
         expectedConfig.put("faultInjectionEnabled", "false");
+        expectedConfig.put("powerLossShadowPath", "");
         expectedConfig.put("scriptTextImportEnabled", "false");
         expectedConfig.put("scriptProcedureImportEnabled", "true");
         expectedConfig.put("aggregationScriptInstructionBudget", "1000000");
@@ -278,7 +286,11 @@ public class ConfigReaderTest {
         expectedConfig.put("maxLogFileSize", "100Mb");
         expectedConfig.put("transactionMaxOps", "100000");
         expectedConfig.put("transactionMaxBytes", "256Mb");
+        expectedConfig.put("transactionTotalMaxBytes", "auto");
         expectedConfig.put("transactionMaxAgeMs", "600000");
+        expectedConfig.put("snapshotMaxBytes", "1Gb");
+        expectedConfig.put("snapshotMaxOpen", "4");
+        expectedConfig.put("snapshotIdleTimeoutMs", "300000");
         expectedConfig.put("maxListensPerConnection", "64");
         expectedConfig.put("maxListens", "10000");
         expectedConfig.put("maxListensPerUser", "256");
@@ -287,9 +299,12 @@ public class ConfigReaderTest {
         expectedConfig.put("listenRerunTimeoutMs", "10000");
         expectedConfig.put("listenThreads", "2");
         expectedConfig.put("maxFilterOperands", "10000");
+        expectedConfig.put("deleteMaxMatches", "100000");
+        expectedConfig.put("updateMaxMatches", "100000");
         expectedConfig.put("maxVectorDimensions", "16384");
         expectedConfig.put("aggregateTimeoutMs", "300000");
-        expectedConfig.put("aggregateMaxResultBytes", "256Mb");
+        expectedConfig.put("aggregateMaxResultBytes", "auto");
+        expectedConfig.put("aggregateTotalHeldBytes", "auto");
         expectedConfig.put("indexScanFallbackPercent", "25");
         expectedConfig.put("backgroundQueueMaxEvents", "200000");
         expectedConfig.put("backgroundBacklogWaitMs", "5000");

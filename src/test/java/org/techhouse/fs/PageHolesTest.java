@@ -7,14 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mockito;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.test.TestUtils;
@@ -122,5 +125,28 @@ public class PageHolesTest {
 
         assertTrue(new DocumentPageStore(fx.paths).readWholeCollectionPage(DB, COLL, 0).isEmpty());
         assertTrue(PageLines.recordsOf(fx.page(0), 0).isEmpty());
+    }
+
+    @Test
+    public void largeBlankUsesSixtyFourKilobyteWrites() throws IOException {
+        final var terminator = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8).length;
+        final var spaces = 700 * 1024;
+        final var writes = new ArrayList<Integer>();
+        final var channel = Mockito.mock(FileChannel.class);
+        Mockito.when(channel.write(Mockito.any(ByteBuffer.class), Mockito.anyLong())).thenAnswer(call -> {
+            final ByteBuffer buffer = call.getArgument(0);
+            final var size = buffer.remaining();
+            while (buffer.hasRemaining()) {
+                assertEquals(' ', buffer.get(), "a blank writes only spaces");
+            }
+            writes.add(size);
+            return size;
+        });
+
+        PageHoles.blank(channel, 0L, spaces + terminator);
+
+        assertEquals(11, writes.size(), "700 KB of spaces in 64 KB writes, not 84 of 8 KB");
+        assertEquals(spaces, writes.stream().mapToInt(Integer::intValue).sum(), "the terminator is kept");
+        assertTrue(writes.stream().allMatch(size -> size <= 64 * 1024));
     }
 }

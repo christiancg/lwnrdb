@@ -1,6 +1,7 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -53,6 +54,10 @@ final class IndexLookupResolver {
             throws IOException {
         final var fieldName = bounds.fieldName();
         return readingIndex(dbName, collName, fieldName, () -> {
+            if (IndexFileReads.fromFile(userCache, dbName, collName, fieldName, Number.class)) {
+                return recorded(userCache, dbName, collName, fieldName,
+                        IndexFileReads.rangeIds(dbName, collName, bounds));
+            }
             final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
             if (index == null) {
                 return null;
@@ -67,6 +72,13 @@ final class IndexLookupResolver {
             throws IOException {
         final var fieldName = bounds.fieldName();
         return readingIndex(dbName, collName, fieldName, () -> {
+            if (IndexFileReads.fromFile(userCache, dbName, collName, fieldName, Number.class)) {
+                final var count = IndexFileReads.rangeCount(dbName, collName, bounds);
+                if (count.isPresent()) {
+                    userCache.recordFieldIndexAccess(dbName, collName, fieldName);
+                }
+                return count;
+            }
             final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
             if (index == null) {
                 return OptionalLong.empty();
@@ -76,17 +88,32 @@ final class IndexLookupResolver {
         });
     }
 
-    @SuppressWarnings("unchecked")
     static <T> OptionalLong countEquals(UserCache userCache, String dbName, String collName, String fieldName, T value)
             throws IOException {
+        return countEqualsAny(userCache, dbName, collName, fieldName, List.of(value));
+    }
+
+    @SuppressWarnings("unchecked")
+    static OptionalLong countEqualsAny(UserCache userCache, String dbName, String collName, String fieldName,
+            List<?> values) throws IOException {
+        final var type = (Class<Object>) commonScalarType(values);
+        if (type == null) {
+            return OptionalLong.empty();
+        }
         return readingIndex(dbName, collName, fieldName, () -> {
-            final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                    (Class<T>) IndexKind.scalarIndexClassOf(value));
+            if (IndexFileReads.fromFile(userCache, dbName, collName, fieldName, type)) {
+                final var count = IndexFileReads.anyOfCount(dbName, collName, fieldName, type, values);
+                if (count.isPresent()) {
+                    userCache.recordFieldIndexAccess(dbName, collName, fieldName);
+                }
+                return count;
+            }
+            final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
             if (index == null) {
                 return OptionalLong.empty();
             }
             userCache.recordFieldIndexAccess(dbName, collName, fieldName);
-            return OptionalLong.of(SearchUtils.countEquals(index, value));
+            return OptionalLong.of(SearchUtils.countAnyOf(index, (List<Object>) values));
         });
     }
 
@@ -94,22 +121,61 @@ final class IndexLookupResolver {
     static Set<String> idsEqualToAny(UserCache userCache, String dbName, String collName, String fieldName,
             List<Object> lookupValues) throws IOException {
         return readingIndex(dbName, collName, fieldName, () -> {
-            final var indexes = new IdentityHashMap<Class<?>, List<FieldIndexEntry<Object>>>();
-            final var ids = new HashSet<String>();
+            final var byType = new IdentityHashMap<Class<?>, List<Object>>();
             for (final var value : lookupValues) {
-                final var type = (Class<Object>) IndexKind.scalarIndexClassOf(value);
-                if (!indexes.containsKey(type)) {
-                    indexes.put(type, userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type));
-                }
-                final var index = indexes.get(type);
-                if (index == null) {
+                byType.computeIfAbsent(IndexKind.scalarIndexClassOf(value), _ -> new ArrayList<>()).add(value);
+            }
+            final var ids = new HashSet<String>();
+            for (final var typed : byType.entrySet()) {
+                final var found = idsEqualToAnyOfType(userCache, dbName, collName, fieldName,
+                        (Class<Object>) typed.getKey(), typed.getValue());
+                if (found == null) {
                     return null;
                 }
-                ids.addAll(SearchUtils.findingByOperator(index, FieldOperatorType.EQUALS, value));
+                ids.addAll(found);
             }
             userCache.recordFieldIndexAccess(dbName, collName, fieldName);
             return ids;
         });
+    }
+
+    private static Set<String> idsEqualToAnyOfType(UserCache userCache, String dbName, String collName,
+            String fieldName, Class<Object> type, List<Object> values) throws IOException {
+        if (IndexFileReads.fromFile(userCache, dbName, collName, fieldName, type)) {
+            return IndexFileReads.anyOfIds(dbName, collName, fieldName, type, values);
+        }
+        final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
+        if (index == null) {
+            return null;
+        }
+        final var ids = new HashSet<String>();
+        for (final var value : values) {
+            ids.addAll(SearchUtils.findingByOperator(index, FieldOperatorType.EQUALS, value));
+        }
+        return ids;
+    }
+
+    private static Class<?> commonScalarType(List<?> values) {
+        Class<?> type = null;
+        for (final var value : values) {
+            if (value == null) {
+                return null;
+            }
+            final var valueType = IndexKind.scalarIndexClassOf(value);
+            if (type != null && type != valueType) {
+                return null;
+            }
+            type = valueType;
+        }
+        return type;
+    }
+
+    private static Set<String> recorded(UserCache userCache, String dbName, String collName, String fieldName,
+            Set<String> ids) {
+        if (ids != null) {
+            userCache.recordFieldIndexAccess(dbName, collName, fieldName);
+        }
+        return ids;
     }
 
     @FunctionalInterface
@@ -138,17 +204,28 @@ final class IndexLookupResolver {
 
     private static Set<String> hashLookup(UserCache userCache, String dbName, String collName, String fieldName,
             FieldOperatorType opType, IndexKind kind, JsonBaseElement value) throws IOException {
-        final var hashIndex = complementSafeHashIndex(userCache, dbName, collName, fieldName, opType, kind);
-        return hashIndex != null
-                ? SearchUtils.findingByOperator(hashIndex, opType, JsonUtils.hashElement(value))
-                : null;
+        final var hash = JsonUtils.hashElement(value);
+        if (isComplement(opType)) {
+            return complement(userCache, dbName, collName, fieldName, null, kind, List.of(hash));
+        }
+        final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+        return hashIndex != null ? SearchUtils.findingByOperator(hashIndex, opType, hash) : null;
     }
 
     @SuppressWarnings("unchecked")
     private static <T> Set<String> scalarLookup(UserCache userCache, String dbName, String collName, String fieldName,
             FieldOperatorType opType, T value) throws IOException {
-        final var index = complementSafeIndex(userCache, dbName, collName, fieldName, opType,
-                (Class<T>) IndexKind.scalarIndexClassOf(value));
+        if (IndexKind.valueKeysCandidatesOnly(value) && opType != FieldOperatorType.EQUALS) {
+            return null;
+        }
+        final var type = (Class<T>) IndexKind.scalarIndexClassOf(value);
+        if (isComplement(opType)) {
+            return complement(userCache, dbName, collName, fieldName, type, null, List.of(value));
+        }
+        if (IndexFileReads.fromFile(userCache, dbName, collName, fieldName, type)) {
+            return IndexFileReads.windowIds(dbName, collName, fieldName, type, opType, value);
+        }
+        final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
         if (index == null || (opType == FieldOperatorType.CONTAINS && value instanceof String
                 && hasAnotherIndex(userCache, dbName, collName, fieldName, String.class, null))) {
             return null;
@@ -197,74 +274,45 @@ final class IndexLookupResolver {
     private static boolean hasAnotherIndex(UserCache userCache, String dbName, String collName, String fieldName,
             Class<?> chosenType, IndexKind chosenKind) throws IOException {
         for (final var type : IndexKind.scalarIndexClasses()) {
-            if (type != chosenType
-                    && userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type) != null) {
+            if (type != chosenType && IndexFileReads.typeExists(userCache, dbName, collName, fieldName, type)) {
                 return true;
             }
         }
         for (final var kind : IndexKind.HASH_KINDS) {
-            if (kind != chosenKind
-                    && userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind) != null) {
+            if (kind != chosenKind && IndexFileReads.kindExists(userCache, dbName, collName, fieldName, kind)) {
                 return true;
             }
         }
         return false;
-    }
-
-    private static boolean complementLacksUniverse(UserCache userCache, String dbName, String collName,
-            String fieldName, Class<?> chosenType, IndexKind chosenKind) throws IOException {
-        if (hasAnotherIndex(userCache, dbName, collName, fieldName, chosenType, chosenKind)) {
-            return true;
-        }
-        final var indexed = indexedIds(userCache, dbName, collName, fieldName);
-        final var pending = pendingIndexWrites.idsFor(dbName, collName);
-        for (final var pkEntry : userCache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
-            final var id = pkEntry.getValue();
-            if (!pending.contains(id) && !indexed.contains(id)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static Set<String> indexedIds(UserCache userCache, String dbName, String collName, String fieldName)
-            throws IOException {
-        final var covered = new HashSet<String>();
-        for (final var type : IndexKind.scalarIndexClasses()) {
-            addIds(covered, userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type));
-        }
-        for (final var kind : IndexKind.HASH_KINDS) {
-            addIds(covered, userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind));
-        }
-        return covered;
-    }
-
-    private static <T> void addIds(Set<String> covered, List<FieldIndexEntry<T>> index) {
-        if (index != null) {
-            for (final var entry : index) {
-                covered.addAll(entry.getIds());
-            }
-        }
     }
 
     private static boolean isComplement(FieldOperatorType opType) {
         return opType == FieldOperatorType.NOT_IN || opType == FieldOperatorType.NOT_EQUALS;
     }
 
-    private static <T> List<FieldIndexEntry<T>> complementSafeIndex(UserCache userCache, String dbName, String collName,
-            String fieldName, FieldOperatorType opType, Class<T> chosen) throws IOException {
-        if (isComplement(opType) && complementLacksUniverse(userCache, dbName, collName, fieldName, chosen, null)) {
+    @SuppressWarnings("unchecked")
+    private static <T> Set<String> complement(UserCache userCache, String dbName, String collName, String fieldName,
+            Class<T> type, IndexKind kind, List<T> operands) throws IOException {
+        if (hasAnotherIndex(userCache, dbName, collName, fieldName, type, kind)
+                || !pendingIndexWrites.idsFor(dbName, collName).isEmpty()) {
             return null;
         }
-        return userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, chosen);
-    }
-
-    private static List<FieldIndexEntry<String>> complementSafeHashIndex(UserCache userCache, String dbName,
-            String collName, String fieldName, FieldOperatorType opType, IndexKind kind) throws IOException {
-        if (isComplement(opType) && complementLacksUniverse(userCache, dbName, collName, fieldName, null, kind)) {
+        final long documents = userCache.pkCountForCoverage(dbName, collName);
+        if (documents < 0) {
             return null;
         }
-        return userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+        if (type != null && IndexFileReads.fromFile(userCache, dbName, collName, fieldName, type)) {
+            return IndexFileReads.idCount(dbName, collName, fieldName, type) == documents
+                    ? IndexFileReads.complementIds(dbName, collName, fieldName, type, operands)
+                    : null;
+        }
+        final var index = type != null
+                ? userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type)
+                : (List<FieldIndexEntry<T>>) (List<?>) userCache.getHashIndexAndLoadIfNecessary(dbName, collName,
+                        fieldName, kind);
+        return index != null && SearchUtils.idCount(index) == documents
+                ? SearchUtils.findingInNotIn(index, FieldOperatorType.NOT_IN, operands)
+                : null;
     }
 
     @SuppressWarnings("unchecked")
@@ -275,23 +323,28 @@ final class IndexLookupResolver {
         }
         final var first = arr.get(0);
         if (first.isJsonObject() || first.isJsonArray()) {
-            final var hashIndex = complementSafeHashIndex(userCache, dbName, collName, fieldName, opType,
-                    first.isJsonObject() ? IndexKind.OBJECT : IndexKind.ARRAY);
-            return hashIndex != null
-                    ? SearchUtils.findingInNotIn(hashIndex, opType,
-                            arr.asList().stream().map(JsonUtils::hashElement).toList())
-                    : null;
+            final var kind = first.isJsonObject() ? IndexKind.OBJECT : IndexKind.ARRAY;
+            final var hashes = arr.asList().stream().map(JsonUtils::hashElement).toList();
+            if (opType == FieldOperatorType.NOT_IN) {
+                return complement(userCache, dbName, collName, fieldName, null, kind, hashes);
+            }
+            final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+            return hashIndex != null ? SearchUtils.findingInNotIn(hashIndex, opType, hashes) : null;
         }
         final var firstValue = indexedValue(first);
-        if (firstValue == null) {
+        if (firstValue == null || IndexKind.valueKeysCandidatesOnly(firstValue) && opType != FieldOperatorType.IN) {
             return null;
         }
-        final var index = complementSafeIndex(userCache, dbName, collName, fieldName, opType,
-                (Class<T>) IndexKind.scalarIndexClassOf(firstValue));
-        return index != null
-                ? SearchUtils.findingInNotIn(index, opType,
-                        (List<T>) arr.asList().stream().map(IndexLookupResolver::indexedValue).toList())
-                : null;
+        final var type = (Class<T>) IndexKind.scalarIndexClassOf(firstValue);
+        final var values = (List<T>) arr.asList().stream().map(IndexLookupResolver::indexedValue).toList();
+        if (opType == FieldOperatorType.NOT_IN) {
+            return complement(userCache, dbName, collName, fieldName, type, null, values);
+        }
+        if (IndexFileReads.fromFile(userCache, dbName, collName, fieldName, type)) {
+            return IndexFileReads.anyOfIds(dbName, collName, fieldName, type, values);
+        }
+        final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
+        return index != null ? SearchUtils.findingInNotIn(index, opType, values) : null;
     }
 
     private static Object indexedValue(JsonBaseElement element) {

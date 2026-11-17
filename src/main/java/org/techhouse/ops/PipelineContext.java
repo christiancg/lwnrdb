@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.host.ScriptErrorNames.TIMED_OUT_MESSAGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.TIMEOUT;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,18 +27,23 @@ import org.techhouse.simplejs.host.PipelineHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 
 public final class PipelineContext implements ReadObserver, AutoCloseable {
+    public static final int POINT_SCANS_BEFORE_PIN = 8;
     private static final long CHECK_EVERY = 256L;
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private static final CompiledScriptCache compiledScriptCache = IocContainer.get(CompiledScriptCache.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final AggregateHeldBudget heldBudget = IocContainer.get(AggregateHeldBudget.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     private final Map<String, ScriptCallable> callables = new HashMap<>();
     private final Map<String, List<PkIndexEntry>> pinnedPk = new HashMap<>();
+    private final Map<String, Integer> pointScannedFetches = new HashMap<>();
     private int transientPins;
     private final long scriptDeadline = System.currentTimeMillis() + configuration.getAggregationScriptTimeoutMs();
     private final boolean scriptsAllowed;
+    private final boolean sharesBudget;
+    private long reservedShared;
     private final boolean timed;
     private final long deadlineNanos;
     private final long maxResultBytes;
@@ -45,17 +51,22 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     private long work;
     private long nextCheck = CHECK_EVERY;
     private long resultBytes;
+    private final List<HeldRows> deferringHeld = new ArrayList<>();
+    private long deferredHeldBytes;
+    private boolean pointHold;
 
-    private PipelineContext(long timeoutMs, long maxResultBytes, AnalyzeContext analyze, boolean scriptsAllowed) {
+    private PipelineContext(long timeoutMs, long maxResultBytes, AnalyzeContext analyze, boolean scriptsAllowed,
+            boolean sharesBudget) {
         this.timed = timeoutMs > 0;
         this.deadlineNanos = timed ? System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs) : 0L;
         this.maxResultBytes = maxResultBytes;
         this.analyze = analyze;
         this.scriptsAllowed = scriptsAllowed;
+        this.sharesBudget = sharesBudget;
     }
 
     public static PipelineContext of(long timeoutMs, long maxResultBytes, AnalyzeContext analyze) {
-        return new PipelineContext(timeoutMs, maxResultBytes, analyze, true);
+        return new PipelineContext(timeoutMs, maxResultBytes, analyze, true, true);
     }
 
     public static PipelineContext fromConfiguration(AnalyzeContext analyze) {
@@ -63,7 +74,12 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     }
 
     public static PipelineContext withoutScripts() {
-        return new PipelineContext(0L, Long.MAX_VALUE, null, false);
+        return new PipelineContext(0L, Long.MAX_VALUE, null, false, false);
+    }
+
+    public PipelineContext holdingPoint() {
+        pointHold = true;
+        return this;
     }
 
     public static long configuredMaxResultBytes() {
@@ -96,17 +112,85 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
         if (resultStream != null) {
             return resultStream;
         }
+        refuseUnderPointHold();
         return scan(cache.streamCollection(dbName, collName)).map(DbEntry::getData);
     }
 
     public Stream<DbEntry> scan(Stream<DbEntry> entries) {
+        if (pointHold) {
+            entries.close();
+            refuseUnderPointHold();
+        }
         return watch(analyze == null ? entries : entries.peek(_ -> analyze.addScanned(1)));
     }
 
+    private void refuseUnderPointHold() {
+        if (pointHold) {
+            throw new PointHoldTooNarrow();
+        }
+    }
+
     public void chargeResult(long bytes) {
+        if (deferredHeldBytes > 0 && resultBytes + deferredHeldBytes + bytes > maxResultBytes) {
+            settleDeferredHeld();
+        }
         resultBytes += bytes;
         if (resultBytes > maxResultBytes) {
             throw new AggregateLimitException(ErrorCode.AGGREGATE_RESULT_TOO_LARGE);
+        }
+        if (sharedPoolRefuses(bytes)) {
+            resultBytes -= bytes;
+            throw new AggregateLimitException(ErrorCode.AGGREGATE_BUDGET_EXHAUSTED);
+        }
+    }
+
+    public void releaseHeld(long bytes) {
+        resultBytes -= bytes;
+        releaseShared(bytes);
+    }
+
+    private boolean sharedPoolRefuses(long bytes) {
+        if (!sharesBudget || bytes <= 0) {
+            return false;
+        }
+        if (!heldBudget.tryReserve(bytes)) {
+            return true;
+        }
+        reservedShared += bytes;
+        return false;
+    }
+
+    private void releaseShared(long bytes) {
+        final var released = Math.min(bytes, reservedShared);
+        if (released > 0) {
+            reservedShared -= released;
+            heldBudget.release(released);
+        }
+    }
+
+    public void chargeHeld(long bytes) {
+        chargeResult(bytes);
+    }
+
+    boolean defersHeld(HeldRows held, long atMostBytes) {
+        if (resultBytes + deferredHeldBytes + atMostBytes > maxResultBytes || sharedPoolRefuses(atMostBytes)) {
+            return false;
+        }
+        if (!deferringHeld.contains(held)) {
+            deferringHeld.add(held);
+        }
+        deferredHeldBytes += atMostBytes;
+        return true;
+    }
+
+    void settledHeld(long atMostBytes) {
+        deferredHeldBytes -= atMostBytes;
+        releaseShared(atMostBytes);
+    }
+
+    private void settleDeferredHeld() {
+        while (!deferringHeld.isEmpty()) {
+            deferringHeld.removeLast().settle();
         }
     }
 
@@ -144,6 +228,12 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
         if (pinned != null) {
             return pinned;
         }
+        if (cache.pkServedByPointScans(dbName, collName)) {
+            return pointScannedFetches.merge(collectionIdentifier, 1, Integer::sum) > POINT_SCANS_BEFORE_PIN
+                    && cache.userCache().tryPinTransientPkIndex()
+                            ? pinnedPointScannedPk(dbName, collName, collectionIdentifier)
+                            : null;
+        }
         final var rows = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         if (cache.userCache().isResidentPkIndex(dbName, collName, rows)) {
             pinnedPk.put(collectionIdentifier, rows);
@@ -152,6 +242,19 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
             pinnedPk.put(collectionIdentifier, rows);
         }
         return rows;
+    }
+
+    private List<PkIndexEntry> pinnedPointScannedPk(String dbName, String collName, String collectionIdentifier)
+            throws IOException {
+        try {
+            final var rows = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            transientPins++;
+            pinnedPk.put(collectionIdentifier, rows);
+            return rows;
+        } catch (IOException | RuntimeException e) {
+            cache.userCache().unpinTransientPkIndex();
+            throw e;
+        }
     }
 
     public ScriptCallable callableFor(String source) {
@@ -191,6 +294,7 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
             callable.close();
         }
         callables.clear();
+        releaseShared(reservedShared);
         pinnedPk.clear();
         while (transientPins > 0) {
             transientPins--;

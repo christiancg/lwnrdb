@@ -127,4 +127,22 @@ public class ChunkedListPartitionTest {
 
         assertEquals(before, TestUtils.getPrivateField(list, "lastChunk", Integer.class));
     }
+
+    @Test
+    public void test_binary_search_agrees_with_collections_on_every_key_present_and_absent() {
+        final var keys = evens(5_000);
+        final var chunked = ChunkedList.copyOf(keys);
+        for (var key = -3; key <= 10_003; key++) {
+            assertEquals(Collections.binarySearch(keys, key), chunked.binarySearch(key, Integer::compare),
+                    "key " + key);
+        }
+    }
+
+    @Test
+    public void test_binary_search_on_an_empty_list_and_on_a_plain_list() {
+        assertEquals(-1, ChunkedList.<Integer>copyOf(List.of()).binarySearch(7, Integer::compare));
+        final var plain = evens(10);
+        assertEquals(Collections.binarySearch(plain, 6), ChunkedList.binarySearch(plain, 6, Integer::compare));
+        assertEquals(Collections.binarySearch(plain, 7), ChunkedList.binarySearch(plain, 7, Integer::compare));
+    }
 }

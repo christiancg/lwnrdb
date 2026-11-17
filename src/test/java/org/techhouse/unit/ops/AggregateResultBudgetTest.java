@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -15,6 +16,11 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.EventProcessorHelper;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
@@ -23,6 +29,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.listen.ListenProcessorThread;
 import org.techhouse.listen.ListenRegistration;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.HeldRows;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.AggregateRequest;
@@ -34,6 +41,7 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class AggregateResultBudgetTest {
+    private static final String FAN_IN_REMOTE = "fanInRemote";
     private static final String JOINED = "joinedColl";
     private static final String LISTENER = "result-budget-listener";
     private static final int LEFT_DOCUMENTS = 200;
@@ -78,6 +86,17 @@ public class AggregateResultBudgetTest {
         TestUtils.setPrivateField(configuration, "aggregateMaxResultBytes", size);
     }
 
+    private static void drainPending() throws Exception {
+        final var collection = FAN_IN_REMOTE;
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        for (final var id : pending.idsFor(TestGlobals.DB, collection)) {
+            final var entries = IocContainer.get(Cache.class).getEntriesByIds(TestGlobals.DB, collection, Set.of(id));
+            EventProcessorHelper
+                    .processEvent(new EntityEvent(EventType.CREATED, TestGlobals.DB, collection, entries.getFirst()));
+        }
+        assertTrue(pending.idsFor(TestGlobals.DB, collection).isEmpty());
+    }
+
     private static String write(String type, String collection, String payload) {
         return "{\"type\":\"" + type + "\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + collection + "\"," + payload + "}";
@@ -115,23 +134,52 @@ public class AggregateResultBudgetTest {
         capAt("1Mb");
         final var refused = run(aggregate(firstRows(50) + "," + joinOnK()));
         assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE.getCode(), refused.getErrorCode(), refused.getMessage());
-        capAt("4Mb");
+        capAt("8Mb");
         final var answered = run(aggregate(firstRows(50) + "," + joinOnK()));
         assertEquals(OperationStatus.OK, answered.getStatus(), answered.getMessage());
     }
 
     @Test
-    public void rowCountIsChargedOneBytePerRow() throws Exception {
-        capAt("199");
+    public void anIndexedJoinFanInIsCharged() throws Exception {
+        final var remote = FAN_IN_REMOTE;
+        assertEquals(OperationStatus.OK, run("{\"type\":\"CREATE_COLLECTION\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + remote + "\"}").getStatus());
+        final var fanIn = new StringBuilder(200 * 10_100);
+        for (var i = 0; i < 200; i++) {
+            fanIn.append(i == 0 ? "" : ",").append("{\"_id\":\"f").append(i).append("\",\"k\":1,\"pad\":\"")
+                    .repeat("p", 10_000).append("\"}");
+        }
+        assertEquals(OperationStatus.OK, run(write("BULK_SAVE", remote, "\"objects\":[" + fanIn + "]")).getStatus());
+        assertEquals(OperationStatus.OK, run(write("CREATE_INDEX", remote, "\"fieldName\":\"k\"")).getStatus());
+        drainPending();
+        final var steps = firstRows(2) + ",{\"type\":\"JOIN\",\"joinCollection\":\"" + remote
+                + "\",\"localField\":\"n\",\"remoteField\":\"k\",\"asField\":\"m\"},"
+                + "{\"type\":\"LIMIT\",\"limit\":1}";
+        final var uncapped = run(aggregate(steps));
+        assertEquals(OperationStatus.OK, uncapped.getStatus(), uncapped.getMessage());
+        capAt("1Mb");
+        final var refused = run(aggregate(steps));
+        assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE.getCode(), refused.getErrorCode(), refused.getMessage());
+    }
+
+    @Test
+    public void resultRowsAreChargedTheirModelledHeap() throws Exception {
+        final var rows = ((AggregateResponse) run(aggregate(""))).getResults();
+        assertEquals(LEFT_DOCUMENTS, rows.size());
+        var modelled = 0L;
+        for (final var row : rows) {
+            modelled += HeldRows.bytesOf(row);
+        }
+        capAt(String.valueOf(modelled * 9 / 10));
         final var refused = run(aggregate(""));
         assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE.getCode(), refused.getErrorCode(), refused.getMessage());
-        capAt("200");
+        capAt(String.valueOf(modelled * 11 / 10));
         assertEquals(OperationStatus.OK, run(aggregate("")).getStatus());
     }
 
     @Test
     public void budgetIsPerRequest() throws Exception {
-        capAt("1Mb");
+        capAt("2Mb");
         for (var i = 0; i < 2; i++) {
             final var response = run(aggregate(concatOf(3_000)));
             assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
@@ -142,7 +190,7 @@ public class AggregateResultBudgetTest {
     public void indexOnlyCountIsNotAffected() throws Exception {
         assertEquals(OperationStatus.OK,
                 run(write("CREATE_INDEX", TestGlobals.COLL, "\"fieldName\":\"n\"")).getStatus());
-        capAt("1");
+        capAt("1Kb");
         final var response = run(aggregate(firstRows(150) + ",{\"type\":\"COUNT\"}"));
         assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
         final var results = ((AggregateResponse) response).getResults();

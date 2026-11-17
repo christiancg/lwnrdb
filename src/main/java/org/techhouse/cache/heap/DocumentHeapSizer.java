@@ -22,13 +22,22 @@ public final class DocumentHeapSizer {
     }
 
     public static long sizeOf(JsonBaseElement element, HeapLayout layout) {
+        return sizeOf(element, layout, false);
+    }
+
+    public static long sizeAtMost(JsonBaseElement element, HeapLayout layout) {
+        return sizeOf(element, layout, true);
+    }
+
+    private static long sizeOf(JsonBaseElement element, HeapLayout layout, boolean wide) {
         return switch (element) {
             case null -> 0L;
             case JsonNull _ -> 0L;
-            case JsonObject object -> objectSize(object, layout);
-            case JsonArray array -> arraySize(array, layout);
-            case JsonCustom<?> custom -> customSize(custom, layout);
-            case JsonString string -> layout.shallowSize(string.getClass()) + stringSize(string.getValue(), layout);
+            case JsonObject object -> objectSize(object, layout, wide);
+            case JsonArray array -> arraySize(array, layout, wide);
+            case JsonCustom<?> custom -> customSize(custom, layout, wide);
+            case JsonString string ->
+                layout.shallowSize(string.getClass()) + stringSize(string.getValue(), layout, wide);
             case JsonNumber number -> layout.shallowSize(number.getClass());
             case JsonBoolean _ -> 0L;
             default -> layout.shallowSize(element.getClass());
@@ -38,7 +47,7 @@ public final class DocumentHeapSizer {
     public static long indexedValueSize(Object value, HeapLayout layout) {
         return switch (value) {
             case null -> 0L;
-            case JsonCustom<?> custom -> customSize(custom, layout);
+            case JsonCustom<?> custom -> customSize(custom, layout, false);
             case String string -> layout.stringSize(string);
             case Boolean _ -> 0L;
             case Number number -> boxSize(number, layout);
@@ -46,7 +55,7 @@ public final class DocumentHeapSizer {
         };
     }
 
-    private static long objectSize(JsonObject object, HeapLayout layout) {
+    private static long objectSize(JsonObject object, HeapLayout layout, boolean wide) {
         final var capacity = object.capacity();
         final var sharedKeys = object.shape() != null && object.shape().isPinned();
         var total = layout.shallowSize(JsonObject.class);
@@ -57,26 +66,27 @@ public final class DocumentHeapSizer {
             total += layout.arraySize(Integer.BYTES, object.indexSlots());
         }
         for (var i = 0; i < object.size(); i++) {
-            total += (sharedKeys ? 0L : keySize(object.keyAt(i), layout)) + sizeOf(object.valueAt(i), layout);
+            total += (sharedKeys ? 0L : keySize(object.keyAt(i), layout, wide))
+                    + sizeOf(object.valueAt(i), layout, wide);
         }
         return total;
     }
 
-    private static long keySize(String key, HeapLayout layout) {
-        return KeyTable.isPinned(key) ? 0L : layout.stringSize(key);
+    private static long keySize(String key, HeapLayout layout, boolean wide) {
+        return KeyTable.isPinned(key) ? 0L : stringSize(key, layout, wide);
     }
 
-    private static long arraySize(JsonArray array, HeapLayout layout) {
+    private static long arraySize(JsonArray array, HeapLayout layout, boolean wide) {
         var total = layout.shallowSize(JsonArray.class) + layout.shallowSize(ArrayList.class)
                 + layout.arrayListArraySize(array.size());
         for (final var element : array) {
-            total += sizeOf(element, layout);
+            total += sizeOf(element, layout, wide);
         }
         return total;
     }
 
-    private static long customSize(JsonCustom<?> custom, HeapLayout layout) {
-        return layout.shallowSize(custom.getClass()) + stringSize(custom.getValue(), layout)
+    private static long customSize(JsonCustom<?> custom, HeapLayout layout, boolean wide) {
+        return layout.shallowSize(custom.getClass()) + stringSize(custom.getValue(), layout, wide)
                 + parsedValueSize(custom.getCustomValue(), layout);
     }
 
@@ -106,7 +116,10 @@ public final class DocumentHeapSizer {
         return cachedByValueOf && value.longValue() >= SMALLEST_SHARED_BOX && value.longValue() <= LARGEST_SHARED_BOX;
     }
 
-    private static long stringSize(String value, HeapLayout layout) {
-        return value == null ? 0L : layout.stringSize(value);
+    private static long stringSize(String value, HeapLayout layout, boolean wide) {
+        if (value == null) {
+            return 0L;
+        }
+        return wide ? layout.stringSizeAtMost(value) : layout.stringSize(value);
     }
 }

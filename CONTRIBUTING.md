@@ -4,7 +4,7 @@ Thanks for taking the time. This is a learning project and it is still experimen
 
 ## Building and testing
 
-You need JDK 27 or newer, the build refuses to run on anything older. The reason is that the regex engine of the embedded JavaScript interpreter reads its Unicode data from the JDK, and I want a script to answer the same on every machine.
+You need JDK 25, and only 25: the build refuses to run on anything else, newer included. The reason is that the regex engine of the embedded JavaScript interpreter reads its Unicode data from the JDK, and I want a script to answer the same on every machine. It is 25 rather than the newest JDK because the Docker image ships a GraalVM native executable and GraalVM has no JDK 26 or 27 release. Build the executable with GraalVM as `JAVA_HOME`: `mvn -Pnative package -DskipTests` writes `target/lwnrdb`.
 
 ```bash
 mvn clean package -DskipTests
@@ -24,11 +24,13 @@ There are no comments in the code. Not Javadoc, not line comments, not XML comme
 
 A file can have at most 500 lines, tests included, and a method at most 200. If you hit the limit, split the class instead of looking for an exclusion. The build also fails on duplicated blocks of code, so a copied helper will be flagged.
 
+If you change what any file under `filePath` looks like (pages, `pk.idx`, the field indexes and their logs, the write-ahead log, vacuum intents, tombstones, the schema, trigger, procedure and schedule files, admin records, or the files under `cluster/`), raise `Globals.STORAGE_FORMAT_VERSION` in the same pull request. A server refuses to start on a folder stamped with another format, which is what stops an old jar from misreading new files. [docs/compatibility.md](docs/compatibility.md) has the whole policy.
+
 There are no runtime dependencies and there won't be. JUnit and Mockito are the only libraries allowed, and only for tests. The JSON parser, the regex engine and the rest are written in the project on purpose.
 
 ## Pull requests
 
-Keep them focused on one thing. Add tests for what you changed, run `mvn verify` locally, and describe what the change does and why in the pull request. If it changes behavior that is documented in the README, update the README in the same pull request.
+Keep them focused on one thing. Add tests for what you changed, run `mvn verify` locally, and describe what the change does and why in the pull request. If it changes behavior that is documented in the README or under `docs/`, update that document in the same pull request. A new configuration key needs its row in the configuration table of [docs/operations.md](docs/operations.md), which a test checks. If a user of the server would notice the change, add a line for it under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), in the section that fits (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security`). Tests, CI and refactors get no entry.
 
 ## Reporting bugs
 
@@ -38,11 +40,17 @@ Open an issue with the steps to reproduce it, what you expected to happen and wh
 
 Versions are not stored in the pom. The build takes the version from `-Drevision`, and when it is missing it falls back to `1.0-SNAPSHOT`, so a local build always produces `target/lwnrdb.jar`.
 
-To cut a release, tag the commit on `main` and push the tag:
+To cut a release, first rename `## [Unreleased]` in `CHANGELOG.md` to the version and the date, for example `## [0.1.0] - 2026-11-20`, check that it names the `protocolVersion` and the `storageFormatVersion`, and merge that into `main`. Then tag the merged commit and push the tag:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The release workflow takes it from there. It runs the full build with that version, attaches `lwnrdb-0.1.0.jar` to a GitHub release and publishes the Docker image to `ghcr.io/christiancg/lwnrdb` with the version and `latest` tags.
+The release workflow takes it from there. It stops before building anything when `CHANGELOG.md` has no section for that version. Otherwise it runs the full build with that version, attaches `lwnrdb-0.1.0.jar` to a GitHub release whose notes are that section and publishes the Docker image to `ghcr.io/christiancg/lwnrdb` with the version and `latest` tags, for `linux/amd64` and `linux/arm64`.
+
+The native executable is built per platform, the arm64 one under QEMU, so the arm64 image takes much longer than the amd64 one. To build both images locally:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t lwnrdb .
+```

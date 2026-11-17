@@ -80,6 +80,10 @@ public record HeapLayout(int headerBytes, int arrayHeaderBytes, int referenceByt
         return shallowSize(String.class) + arraySize(1, backingArrayLength(value));
     }
 
+    public long stringSizeAtMost(String value) {
+        return shallowSize(String.class) + arraySize(UTF16_BYTES_PER_CHAR, value.length());
+    }
+
     private static int backingArrayLength(String value) {
         for (var i = 0; i < value.length(); i++) {
             if (value.charAt(i) > LATIN1_MAX_CHAR) {

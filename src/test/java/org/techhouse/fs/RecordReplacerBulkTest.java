@@ -179,7 +179,7 @@ public class RecordReplacerBulkTest {
 
         final var result = rf.bulk(updates("c"), resident, _ -> new PageOccupancy(1L, 9L));
 
-        assertEquals(1, rf.vacuumed.size(), "a stale count still vacuums, through the exact walk");
+        assertEquals(2, rf.vacuumed.size(), "a stale count still vacuums before and after, through the exact walk");
         assertEquals(1, result.size());
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
         assertEquals(StorageFixture.record("c", "bulk-c"), rf.fx.readAt(rf.fx.indexed("c")));

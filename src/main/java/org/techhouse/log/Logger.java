@@ -2,9 +2,9 @@ package org.techhouse.log;
 
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 
@@ -12,6 +12,10 @@ public class Logger {
     private static final String MESSAGE_SEPARATOR = " - ";
     private static final Character LOG_ENTRY_SEPARATOR = '-';
     private static final String EXCEPTION_MESSAGE_SEPARATOR = " -> ";
+    private static final String CLASS_MESSAGE_SEPARATOR = ": ";
+    private static final String CAUSED_BY = "Caused by: ";
+    private static final String STACK_FRAME_INDENT = "\tat ";
+    private static final int DESCRIBED_EXCEPTION_CAPACITY = 1024;
     private final Class<?> tClass;
 
     public Logger(Class<?> tClass) {
@@ -88,16 +92,30 @@ public class Logger {
                 + severity.name() + LOG_ENTRY_SEPARATOR + tClass.getName() + MESSAGE_SEPARATOR
                 + LogSanitizer.neutralise(message);
         if (exception != null) {
-            final var exceptionMessage = exception.getMessage();
-            if (exceptionMessage != null) {
-                logEntry += EXCEPTION_MESSAGE_SEPARATOR + LogSanitizer.neutralise(exceptionMessage);
-            }
-            final var stackTrace = exception.getStackTrace();
-            if (stackTrace != null) {
-                logEntry += Arrays.stream(stackTrace).map(StackTraceElement::toString)
-                        .collect(Collectors.joining(Globals.NEWLINE));
-            }
+            logEntry += EXCEPTION_MESSAGE_SEPARATOR + describe(exception);
         }
         LogWriter.writeLogEntry(logEntry);
+    }
+
+    private static String describe(Throwable exception) {
+        final var out = new StringBuilder(DESCRIBED_EXCEPTION_CAPACITY);
+        final var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+        for (var current = exception; current != null && seen.add(current); current = current.getCause()) {
+            if (current != exception) {
+                out.append(Globals.NEWLINE).append(CAUSED_BY);
+            }
+            out.append(current.getClass().getName());
+            final var message = current.getMessage();
+            if (message != null) {
+                out.append(CLASS_MESSAGE_SEPARATOR).append(LogSanitizer.neutralise(message));
+            }
+            final var stackTrace = current.getStackTrace();
+            if (stackTrace != null) {
+                for (final var frame : stackTrace) {
+                    out.append(Globals.NEWLINE).append(STACK_FRAME_INDENT).append(frame);
+                }
+            }
+        }
+        return out.toString();
     }
 }

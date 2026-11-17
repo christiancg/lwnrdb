@@ -6,7 +6,7 @@ import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class PendingForce {
-    static final PendingForce NONE = new PendingForce();
+    public static final PendingForce NONE = new PendingForce();
 
     private final AtomicReference<IOException> failure = new AtomicReference<>();
     private Thread forcing;
@@ -28,6 +28,8 @@ public final class PendingForce {
             SyncedWrites.content(file);
         } catch (IOException e) {
             failure.set(e);
+        } catch (RuntimeException | Error e) {
+            failure.set(new IOException("The deferred force of " + file + " failed", e));
         }
     }
 

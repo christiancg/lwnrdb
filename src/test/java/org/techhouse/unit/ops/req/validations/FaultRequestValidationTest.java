@@ -56,6 +56,14 @@ public class FaultRequestValidationTest {
     }
 
     @Test
+    public void test_fail_is_valid_only_on_a_failable_point() {
+        assertTrue(RequestValidator.validate(arm("FILE_FORCED", "FAIL")).isValid());
+        assertFalse(RequestValidator.validate(arm("WRITE_OWNERSHIP_RECHECKED", "FAIL")).isValid());
+        assertFalse(RequestValidator.validate(arm("PEER_REPLY", "FAIL")).isValid());
+        assertFalse(RequestValidator.validate(arm("FILE_FORCED", "DROP")).isValid());
+    }
+
+    @Test
     public void test_the_removed_delay_action_fails() {
         assertFalse(RequestValidator.validate(arm("ANTI_ENTROPY_SNAPSHOTTED", "DELAY")).isValid());
     }

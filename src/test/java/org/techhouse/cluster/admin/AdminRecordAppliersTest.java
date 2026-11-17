@@ -11,6 +11,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -216,8 +217,33 @@ public class AdminRecordAppliersTest extends AdminRecordTestBase {
     }
 
     @Test
+    public void test_a_tombstone_is_recorded_even_when_its_removal_cannot_take_the_lock() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        Thread.ofVirtual().start(() -> {
+            try {
+                locks.lock(TestGlobals.DB, Globals.COLLECTION_NAMES_LOCK);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }).join();
+        final var key = AdminRecordKey.collection(TestGlobals.DB, TestGlobals.COLL);
+        final var version = clock.next();
+        final var origTimeout = config.getReplicationAckTimeoutMs();
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 50L);
+        try {
+            assertFalse(AdminRecordMerge.apply(List.of(tombstone(key, version)), false).complete());
+        } finally {
+            TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origTimeout);
+        }
+
+        assertEquals(version, tombstones().get(key.id()).longValue());
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    @Test
     public void test_a_removed_database_that_is_not_there_is_already_removed() throws Exception {
-        assertTrue(DatabaseRecordApplier.remove("absent", true));
-        assertTrue(CollectionRecordApplier.remove(TestGlobals.DB, "absent", false));
+        assertTrue(DatabaseRecordApplier.remove(tombstone(AdminRecordKey.database("absent"), clock.next()), true));
+        assertTrue(CollectionRecordApplier
+                .remove(tombstone(AdminRecordKey.collection(TestGlobals.DB, "absent"), clock.next()), false));
     }
 }

@@ -299,11 +299,9 @@ public class ClusterRouter {
             logger.warning("Could not reach owner " + ownerAddress + ": " + e.getMessage());
             return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
         } catch (Exception e) {
-            if (READS.contains(type) && clusterConfig.readFallbackToLocal()) {
-                return null;
-            }
             logger.warning("Owner " + ownerAddress + " did not answer a forwarded request: " + e.getMessage());
-            return eJson.toJson(new OperationResponse(type, ErrorCode.WRITE_OUTCOME_UNKNOWN));
+            final var code = READS.contains(type) ? ErrorCode.OWNER_UNREACHABLE : ErrorCode.WRITE_OUTCOME_UNKNOWN;
+            return eJson.toJson(new OperationResponse(type, code));
         }
     }
 }

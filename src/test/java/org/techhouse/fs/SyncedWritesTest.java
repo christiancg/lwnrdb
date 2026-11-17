@@ -9,10 +9,12 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.test.RequiresDirectorySync;
 
 public class SyncedWritesTest {
     @TempDir
@@ -49,6 +51,7 @@ public class SyncedWritesTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_on_forces_the_channel_and_the_path() throws Exception {
         recorder = RecordingForcer.install(true);
         final var file = file();
@@ -92,5 +95,34 @@ public class SyncedWritesTest {
         recorder = RecordingForcer.install(true).failingFolders();
 
         assertThrows(IOException.class, () -> SyncedWrites.verifyFolderSync(tmp.toPath()));
+    }
+
+    @Test
+    public void test_a_grouped_file_removed_before_its_force_is_skipped() throws Exception {
+        recorder = RecordingForcer.install(true);
+        final var kept = file();
+        final var removed = new File(tmp, "coll-tag-String.idxlog");
+        final var group = new ForceGroup();
+        group.add(removed.toPath());
+        group.add(kept.toPath());
+
+        group.force();
+
+        assertEquals(List.of(kept.toPath().toAbsolutePath().normalize()), recorder.forced(),
+                "a fold that deleted an index log between the group's listing and its force fails nothing");
+    }
+
+    @Test
+    public void test_a_grouped_page_or_pk_index_removed_before_its_force_still_fails() throws Exception {
+        recorder = RecordingForcer.install(true);
+        final var kept = file();
+        for (final var name : List.of("coll-1.dat", "coll-pk.idx", "coll-tag-String.idx", "coll.intents")) {
+            final var group = new ForceGroup();
+            group.add(new File(tmp, name).toPath());
+            group.add(kept.toPath());
+
+            assertThrows(NoSuchFileException.class, group::force,
+                    "a missing " + name + " is a failure, not an absence");
+        }
     }
 }

@@ -6,6 +6,7 @@ from typing import Callable, Dict, List, Optional
 StatReader = Callable[[], str]
 START = "PHASE_START"
 END = "PHASE_END"
+TIMED = "PHASE_TIMED"
 USAGE_USEC = re.compile(r"^usage_usec\s+(\d+)\s*$", re.MULTILINE)
 
 
@@ -28,12 +29,20 @@ def _seconds_between(first: Optional[int], second: Optional[int]) -> Optional[fl
     return (second - first) / 1e6
 
 
+def timed_marker(name: str) -> Callable[[], None]:
+    def announce() -> None:
+        print(f"{TIMED} {name}", flush=True)
+
+    return announce
+
+
 class PhaseCpu:
     def __init__(self, read_stat: StatReader):
         self._read_stat = read_stat
         self._order: List[str] = []
         self._started: Dict[str, Optional[int]] = {}
         self._ended: Dict[str, Optional[int]] = {}
+        self._timed: Dict[str, Optional[int]] = {}
         self._operations: Dict[str, int] = {}
 
     def on_line(self, line: str) -> None:
@@ -41,6 +50,8 @@ class PhaseCpu:
         if len(parts) >= 2 and parts[0] == START:
             self._order.append(parts[1])
             self._started[parts[1]] = parse_usage_usec(self._read_stat())
+        elif len(parts) >= 2 and parts[0] == TIMED and parts[1] in self._started:
+            self._timed[parts[1]] = parse_usage_usec(self._read_stat())
         elif len(parts) >= 3 and parts[0] == END and parts[1] in self._started and parts[2].isdigit():
             self._ended[parts[1]] = parse_usage_usec(self._read_stat())
             self._operations[parts[1]] = int(parts[2])
@@ -50,14 +61,16 @@ class PhaseCpu:
         for index, name in enumerate(self._order):
             last = index + 1 == len(self._order)
             boundary = self._ended.get(name) if last else self._started.get(self._order[index + 1])
-            seconds[name] = _seconds_between(self._started.get(name), boundary)
+            start = self._timed[name] if name in self._timed else self._started.get(name)
+            seconds[name] = _seconds_between(start, boundary)
         return seconds
 
     def attach(self, report: dict) -> None:
         seconds = self.cpu_seconds()
         for phase in report.get("phases", []):
             name = phase["phase"]
-            operations = phase.get("ops_with_warmup") or self._operations.get(name)
+            operations = phase.get("ops") if name in self._timed else None
+            operations = operations or phase.get("ops_with_warmup") or self._operations.get(name)
             if seconds.get(name) is not None and operations:
                 phase["cpu_seconds"] = round(seconds[name], 3)
                 phase["cpu_ms_per_op"] = round(seconds[name] * 1000 / operations, 4)

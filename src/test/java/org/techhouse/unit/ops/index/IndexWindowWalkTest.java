@@ -1,10 +1,13 @@
 package org.techhouse.unit.ops.index;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -18,21 +21,26 @@ import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.IndexWindowWalk;
+import org.techhouse.ops.index.RangeIdWalk;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.RangeBounds;
 
 public class IndexWindowWalkTest {
     private static final String FIELD = "v";
     private final Cache cache = IocContainer.get(Cache.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
     private FieldIndexBatchSupport support;
 
     @BeforeEach
@@ -225,6 +233,79 @@ public class IndexWindowWalkTest {
             assertNull(IndexWindowWalk.open(new FieldOperator(FieldOperatorType.EQUALS, "unindexed", new JsonNumber(1)),
                     TestGlobals.DB, TestGlobals.COLL, 2, ReadObserver.NONE));
             assertNotNull(open(operator(FieldOperatorType.EQUALS, new JsonNumber(1)), 2));
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    private void loseTheIndex() {
+        fs.dropIndex(TestGlobals.DB, TestGlobals.COLL, FIELD);
+        cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, FIELD);
+    }
+
+    @Test
+    public void test_a_walk_whose_matches_are_all_pending_survives_its_type_emptying() throws Exception {
+        seed(40, 1);
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        final var ids = new ArrayList<>(idsOf("n1-", 40));
+        ids.forEach(id -> pending.mark(TestGlobals.DB, TestGlobals.COLL, id));
+        locks.lockRead(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            final var walk = open(operator(FieldOperatorType.EQUALS, new JsonNumber(1)), 2);
+            assertNotNull(walk);
+            final var emitted = new ArrayList<>(take(walk, 2));
+            for (final var id : ids) {
+                support.put(id, new JsonString("moved"));
+            }
+            support.applyBatch(FIELD, ids);
+            assertFalse(
+                    fs.indexTypeFileExists(TestGlobals.DB, TestGlobals.COLL, FIELD, IndexKind.fileLabel(Number.class)),
+                    "the emptied type's files are gone");
+
+            emitted.addAll(take(walk, Integer.MAX_VALUE));
+
+            assertEquals(idsOf("n1-", 40), new TreeSet<>(emitted), "every pending id was emitted, once");
+            assertEquals(40, emitted.size());
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+            pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    @Test
+    public void test_an_index_lost_in_the_middle_of_a_window_walk_fails_the_walk() throws Exception {
+        seed(300, 1);
+        locks.lockRead(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            final var walk = open(operator(FieldOperatorType.EQUALS, new JsonNumber(1)), 4);
+            assertEquals(4, take(walk, 4).size());
+            loseTheIndex();
+
+            assertThrows(UncheckedIOException.class, () -> take(walk, Integer.MAX_VALUE));
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    @Test
+    public void test_an_index_lost_in_the_middle_of_a_range_walk_fails_the_walk() throws Exception {
+        seed(300, 1);
+        final var bounds = RangeBounds.fromLeaves(FIELD,
+                List.of(operator(FieldOperatorType.GREATER_THAN_EQUALS, new JsonNumber(0))));
+        locks.lockRead(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            final var walk = RangeIdWalk.open(TestGlobals.DB, TestGlobals.COLL, bounds, true, 4, ReadObserver.NONE);
+            assertNotNull(walk);
+            for (var i = 0; i < 4; i++) {
+                walk.next();
+            }
+            loseTheIndex();
+
+            assertThrows(UncheckedIOException.class, () -> {
+                while (walk.hasNext()) {
+                    walk.next();
+                }
+            });
         } finally {
             locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
         }

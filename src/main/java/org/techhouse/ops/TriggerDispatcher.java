@@ -22,6 +22,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.MetadataReadException;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.LogRateLimiter;
 import org.techhouse.log.Logger;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.DatabaseHostBindings;
@@ -38,6 +39,7 @@ public final class TriggerDispatcher {
     private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TriggerDispatcher.class);
+    private static final LogRateLimiter DEFERRAL_LOG = new LogRateLimiter(Globals.LOG_RATE_LIMIT_PER_SECOND);
 
     private TriggerDispatcher() {
     }
@@ -93,7 +95,7 @@ public final class TriggerDispatcher {
             DefinerAuthority.disableTrigger(event.getDbName(), event.getCollName(), trigger, refusal);
             return;
         }
-        switch (admission.acquireSlices(definer, event.getDbName())) {
+        switch (admission.acquireSlicesWithin(definer, event.getDbName(), admission.queueWaitMs())) {
             case ScriptAdmission.Refusal limited -> deferForAdmission(event, limited.scope());
             case ScriptAdmission.Permit permit -> {
                 try (permit) {
@@ -113,8 +115,11 @@ public final class TriggerDispatcher {
         if (withinClusterRetryWindow(event)) {
             final var delay = Math.max(1L, backoffFor(event.getAttempt()));
             triggerExecutor.submitAfter(event.retry(event.getAttempt()), delay);
-            logger.info("Trigger '" + event.getTriggerName() + "' " + why + "; retrying in " + delay
-                    + "ms without consuming an attempt");
+            final var entry = DEFERRAL_LOG.admit("Trigger '" + event.getTriggerName() + "' " + why + "; retrying in "
+                    + delay + "ms without consuming an attempt");
+            if (entry != null) {
+                logger.info(entry);
+            }
             return;
         }
         triggerExecutor.countFailure();

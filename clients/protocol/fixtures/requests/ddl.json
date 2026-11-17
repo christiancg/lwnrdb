@@ -1,0 +1,11 @@
+{
+  "area": "ddl",
+  "cases": [
+    {"name":"ddl.list_databases","request":{"type":"LIST_DATABASES"}},
+    {"name":"ddl.create_database","request":{"type":"CREATE_DATABASE","databaseName":"shop"}},
+    {"name":"ddl.drop_database","request":{"type":"DROP_DATABASE","databaseName":"shop"}},
+    {"name":"ddl.list_collections","request":{"type":"LIST_COLLECTIONS","databaseName":"shop"}},
+    {"name":"ddl.create_collection","request":{"type":"CREATE_COLLECTION","databaseName":"shop","collectionName":"orders"}},
+    {"name":"ddl.drop_collection","request":{"type":"DROP_COLLECTION","databaseName":"shop","collectionName":"orders"}}
+  ]
+}

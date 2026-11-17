@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiPredicate;
 import org.techhouse.config.Configuration;
 import org.techhouse.test.TestUtils;
 
@@ -18,6 +19,7 @@ public final class RecordingForcer implements Forcer, AutoCloseable {
     private final AtomicInteger foldersBeforeFailing = new AtomicInteger(-1);
     private volatile boolean failFiles;
     private volatile String failingSuffix;
+    private volatile BiPredicate<List<String>, String> refusal = (_, _) -> false;
 
     private RecordingForcer(String syncWrites) {
         this.syncWrites = syncWrites;
@@ -39,6 +41,10 @@ public final class RecordingForcer implements Forcer, AutoCloseable {
         failingSuffix = nameSuffix;
     }
 
+    public void refusingWhen(BiPredicate<List<String>, String> refusal) {
+        this.refusal = refusal;
+    }
+
     void failingTheSecondFolderSync() {
         foldersBeforeFailing.set(1);
     }
@@ -56,7 +62,8 @@ public final class RecordingForcer implements Forcer, AutoCloseable {
         if (folder && foldersBeforeFailing.getAndDecrement() == 0) {
             throw new IOException("force refused for " + path);
         }
-        if (folder && failFolders || !folder && failFiles || named) {
+        if (folder && failFolders || !folder && failFiles || named
+                || refusal.test(forcedNames(), String.valueOf(path.getFileName()))) {
             throw new IOException("force refused for " + path);
         }
         forced.add(path.toAbsolutePath().normalize());

@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -18,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Configuration;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
 public class WriteAheadLogTest {
@@ -70,26 +70,29 @@ public class WriteAheadLogTest {
     }
 
     @Test
-    public void test_a_record_appended_by_another_writer_is_seen_by_length() throws Exception {
+    public void test_a_record_appended_by_another_writer_is_seen_once_the_state_is_forgotten() throws Exception {
         final var other = WalCodec
                 .encode(new WalRecord(500L, List.of(new WalChange(WalTarget.PAGE_BLANK, 0L, 0L, 0L, new byte[0]))));
-        Files.write(log().toPath(), other, StandardOpenOption.APPEND);
+        OutsideWrites.appendToLog(log(), other);
+        OutsideWrites.madeTo(log());
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
         final var records = decoded().records();
-        assertEquals(501L, records.getLast().seq(), "the bookkeeping re-reads a log it did not write last");
+        assertEquals(501L, records.getLast().seq(), "the bookkeeping re-reads a log whose state was forgotten");
         assertEquals(5, records.size());
     }
 
     @Test
     public void test_a_torn_tail_is_cut_before_the_next_append() throws Exception {
-        Files.write(log().toPath(), new byte[]{'W', 'R', 0}, StandardOpenOption.APPEND);
+        OutsideWrites.appendToLog(log(), new byte[]{'W', 'R', 0});
+        OutsideWrites.madeTo(log());
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
         final var decoded = decoded();
-        assertEquals(Files.size(log().toPath()), decoded.cleanLength());
+        final var bytes = Files.readAllBytes(log().toPath());
+        assertEquals(decoded.cleanLength(), WalWriteGroup.writtenEnd(bytes, decoded.cleanLength()));
         assertEquals(4, decoded.records().size());
     }
 
@@ -123,7 +126,7 @@ public class WriteAheadLogTest {
         WriteAheadLog.guardWith(new CheckpointGuard() {
             @Override
             public boolean holdsIndexWork(String dbName, String collName) {
-                return false;
+                return true;
             }
 
             @Override
@@ -192,6 +195,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_inside_a_group_settles_it_first() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             final var wal = new WriteAheadLog(rf.fx.paths);
@@ -272,6 +276,25 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
+    public void test_a_failed_group_force_removes_a_page_file_the_group_created() throws Exception {
+        try (var recorder = RecordingForcer.install(true)) {
+            final var wal = new WriteAheadLog(rf.fx.paths);
+            final var created = rf.fx.page(1);
+            wal.openGroup(DB, COLL);
+            rf.replace("b", "new-b", 1, PagePlacement.APPEND);
+            assertTrue(created.exists());
+            recorder.failingFor(COLL + ".wal");
+
+            assertFalse(wal.closeGroup(DB, COLL));
+
+            assertFalse(created.exists(), "a page the taken-back group created is removed, not left empty");
+            assertEquals(StorageFixture.record("b", "old-b"), rf.fx.readAt(rf.fx.indexed("b")));
+        }
+    }
+
+    @Test
+    @RequiresDirectorySync
     public void test_a_failed_take_back_marks_the_log_unapplied() throws Exception {
         final var page = rf.fx.page(0);
         final var old = rf.fx.indexed("b");
@@ -288,6 +311,8 @@ public class WriteAheadLogTest {
             }
         }
         try (var ignored = RecordingForcer.install(true)) {
+            assertThrows(IOException.class, () -> rf.replace("a", "new-a", 0, PagePlacement.APPEND),
+                    "a write that read the collection before the replay is refused");
             rf.replace("a", "new-a", 0, PagePlacement.APPEND);
 
             assertEquals(StorageFixture.record("b", "new-b"), rf.fx.readAt(rf.fx.indexed("b")),
@@ -297,6 +322,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_forces_the_unforced_index_logs_with_the_pages() throws Exception {
         final var idxlog = new File(rf.fx.paths.collectionFolder(DB, COLL), COLL + "-tag-String.idxlog");
         try (var recorder = RecordingForcer.install(true)) {
@@ -318,6 +344,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_drops_a_group_base_even_with_no_record_after_it() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             final var wal = new WriteAheadLog(rf.fx.paths);
@@ -338,6 +365,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_pk_index_rewrite_on_a_quiet_log_forces_nothing_in_the_log() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
@@ -353,7 +381,7 @@ public class WriteAheadLogTest {
     @Test
     public void test_an_append_outside_a_group_is_one_forced_record() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
-            final var lengthBefore = log().length();
+            final var lengthBefore = OutsideWrites.logEnd(log());
 
             rf.replace("a", "new-a", 0, PagePlacement.APPEND);
 
@@ -361,13 +389,14 @@ public class WriteAheadLogTest {
             final var records = decoded().records();
             assertEquals(4, records.size());
             assertFalse(records.getLast().changes().isEmpty(), "the header and the payload landed together");
-            assertEquals(log().length() - lengthBefore, WalCodec.encode(records.getLast()).length);
+            assertEquals(OutsideWrites.logEnd(log()) - lengthBefore, WalCodec.encode(records.getLast()).length);
         }
     }
 
     @Test
     public void test_state_of_a_missing_log_is_empty() throws Exception {
         assertTrue(log().delete());
+        OutsideWrites.madeTo(log());
 
         rf.replace("a", "new-a", 0, PagePlacement.APPEND);
 

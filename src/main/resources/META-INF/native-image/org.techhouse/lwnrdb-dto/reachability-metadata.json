@@ -113,6 +113,13 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.data.IndexKind$ScalarClasses",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.data.IndexedDbEntry",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -128,6 +135,20 @@
     },
     {
       "type": "org.techhouse.data.JsonFieldReader",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.NameMemo",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.NameMemo$Generation",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
@@ -519,6 +540,13 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.ops.req.ReadSnapshotRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.req.ReindexRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -527,6 +555,13 @@
     },
     {
       "type": "org.techhouse.ops.req.ReleaseFaultRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.ReleaseSnapshotRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
@@ -610,6 +645,13 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.ops.req.ServerInfoRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.req.SetDatabaseOwnersRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -618,6 +660,13 @@
     },
     {
       "type": "org.techhouse.ops.req.SetPasswordRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.StartSnapshotRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
@@ -932,6 +981,13 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.ops.req.validations.SnapshotRequestValidator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.req.validations.UserRequestValidator",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -982,6 +1038,13 @@
     },
     {
       "type": "org.techhouse.ops.resp.CloseConnectionResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.DeleteManyResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
@@ -1107,6 +1170,13 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.ops.resp.ReadSnapshotResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.resp.ReindexResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -1178,6 +1248,27 @@
     },
     {
       "type": "org.techhouse.ops.resp.SaveTriggerResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveWhereResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ServerInfoResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.StartSnapshotResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
@@ -1409,6 +1500,10 @@
       "allDeclaredConstructors": true
     },
     {
+      "type": "org.techhouse.cache.IndexIdCounts",
+      "allDeclaredConstructors": true
+    },
+    {
       "type": "org.techhouse.cache.MemoryManagement",
       "allDeclaredConstructors": true
     },
@@ -1505,7 +1600,23 @@
       "allDeclaredConstructors": true
     },
     {
+      "type": "org.techhouse.conn.MetricsServer",
+      "allDeclaredConstructors": true
+    },
+    {
       "type": "org.techhouse.conn.PreAuthSlots",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.conn.RequestMetrics",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.conn.ResponseBudget",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.conn.WriteStallWatchdog",
       "allDeclaredConstructors": true
     },
     {
@@ -1522,6 +1633,10 @@
     },
     {
       "type": "org.techhouse.listen.ListenManager",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ops.AggregateHeldBudget",
       "allDeclaredConstructors": true
     },
     {
@@ -1558,6 +1673,22 @@
     },
     {
       "type": "org.techhouse.ops.auth.PasswordCheckGate",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ops.auth.VerifiedPasswords",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ops.snapshot.SnapshotRegistry",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ops.snapshot.SnapshotSweeper",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ops.tx.TransactionBudget",
       "allDeclaredConstructors": true
     },
     {

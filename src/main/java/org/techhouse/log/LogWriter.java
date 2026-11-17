@@ -2,6 +2,7 @@ package org.techhouse.log;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -20,10 +21,15 @@ public class LogWriter {
     private static final Configuration config = Configuration.getInstance();
     private static final ReentrantLock WRITER_LOCK = new ReentrantLock();
     private static final String ROLLED_SUFFIX = ".1";
+    private static final int MAX_HELD_ENTRIES = 256;
+    private static final List<String> HELD_ENTRIES = new ArrayList<>();
     private static AppendingFile openWriter;
     private static String openPath;
     private static boolean needsLeadingNewline;
     private static long openBytes;
+    private static LocalDate prunedFor;
+    @SuppressWarnings("FieldMayBeFinal")
+    private static Clock clock = Clock.systemDefaultZone();
 
     public static void createLogPathAndRemoveOldFiles() throws IOException {
         final var logDirectory = Path.of(config.getLogPath());
@@ -31,8 +37,15 @@ public class LogWriter {
             System.out.println("Error creating log directory");
             return;
         }
-        deleteOldLogFiles(logDirectory);
-        createCurrentLogFileIfNecessary();
+        final var today = LocalDate.now(clock);
+        deleteOldLogFiles(logDirectory, today);
+        WRITER_LOCK.lock();
+        try {
+            prunedFor = today;
+        } finally {
+            WRITER_LOCK.unlock();
+        }
+        createCurrentLogFileIfNecessary(today);
     }
 
     private static boolean createOwnerOnly(Path logDirectory) {
@@ -44,13 +57,17 @@ public class LogWriter {
         }
     }
 
-    private static void createCurrentLogFileIfNecessary() throws IOException {
-        if (!LogFolder.createFileIfAbsent(currentLogFile())) {
+    private static void createCurrentLogFileIfNecessary(LocalDate today) throws IOException {
+        if (!LogFolder.createFileIfAbsent(logFileOf(today))) {
             System.out.println("Error creating log file");
         }
     }
 
     public static void deleteOldLogFiles(Path logDirectory) {
+        deleteOldLogFiles(logDirectory, LocalDate.now(clock));
+    }
+
+    private static void deleteOldLogFiles(Path logDirectory, LocalDate now) {
         final List<Path> allFiles;
         try {
             allFiles = LogFolder.listRegularFiles(logDirectory);
@@ -58,9 +75,8 @@ public class LogWriter {
             return;
         }
         final var maxLogFiles = config.getMaxLogFiles();
-        final var now = LocalDate.now();
         final var fileNames = new ArrayList<String>();
-        fileNames.add(logFileName(LocalDate.now()));
+        fileNames.add(logFileName(now));
         for (var i = 1; i <= maxLogFiles; i++) {
             fileNames.add(logFileName(now.minusDays(i)));
         }
@@ -95,8 +111,8 @@ public class LogWriter {
         }
     }
 
-    private static Path currentLogFile() {
-        return Path.of(config.getLogPath(), logFileName(LocalDate.now()));
+    private static Path logFileOf(LocalDate date) {
+        return Path.of(config.getLogPath(), logFileName(date));
     }
 
     private static String logFileName(LocalDate date) {
@@ -109,6 +125,11 @@ public class LogWriter {
     }
 
     public static void writeLogEntry(String logEntry) {
+        if (config.getLogPath() == null) {
+            holdUntilConfigured(logEntry);
+            System.out.println(logEntry);
+            return;
+        }
         try {
             appendToLogFile(logEntry);
             System.out.println(logEntry);
@@ -117,26 +138,69 @@ public class LogWriter {
         }
     }
 
+    private static void holdUntilConfigured(String logEntry) {
+        WRITER_LOCK.lock();
+        try {
+            if (HELD_ENTRIES.size() < MAX_HELD_ENTRIES) {
+                HELD_ENTRIES.add(logEntry);
+            }
+        } finally {
+            WRITER_LOCK.unlock();
+        }
+    }
+
     private static void appendToLogFile(String logEntry) throws IOException {
         WRITER_LOCK.lock();
         try {
-            final var file = currentLogFile();
-            final var path = file.toAbsolutePath().toString();
-            ensureWriterFor(file, path);
-            if (openBytes > 0 && openBytes + logEntry.length() > config.sizeValue(ConfigKey.MAX_LOG_FILE_SIZE)) {
-                roll(file);
-                ensureWriterFor(file, path);
+            if (!HELD_ENTRIES.isEmpty()) {
+                final var held = List.copyOf(HELD_ENTRIES);
+                HELD_ENTRIES.clear();
+                for (final var entry : held) {
+                    appendLocked(entry);
+                }
             }
-            if (needsLeadingNewline) {
-                openWriter.append(Globals.NEWLINE);
-                openBytes += Globals.NEWLINE.length();
-            }
-            openWriter.append(logEntry);
-            openWriter.flush();
-            openBytes += logEntry.length();
-            needsLeadingNewline = true;
+            appendLocked(logEntry);
         } finally {
             WRITER_LOCK.unlock();
+        }
+    }
+
+    private static void appendLocked(String logEntry) throws IOException {
+        final var today = LocalDate.now(clock);
+        final var file = logFileOf(today);
+        final var path = file.toAbsolutePath().toString();
+        ensureWriterFor(file, path);
+        pruneOnDateChange(file, today);
+        if (openBytes > 0 && openBytes + logEntry.length() > config.sizeValue(ConfigKey.MAX_LOG_FILE_SIZE)) {
+            roll(file);
+            ensureWriterFor(file, path);
+        }
+        if (needsLeadingNewline) {
+            openWriter.append(Globals.NEWLINE);
+            openBytes += Globals.NEWLINE.length();
+        }
+        openWriter.append(logEntry);
+        openWriter.flush();
+        openBytes += logEntry.length();
+        needsLeadingNewline = true;
+    }
+
+    private static void pruneOnDateChange(Path file, LocalDate today) {
+        if (today.equals(prunedFor)) {
+            return;
+        }
+        final var firstDay = prunedFor == null;
+        prunedFor = today;
+        if (firstDay) {
+            return;
+        }
+        try {
+            final var folder = file.toAbsolutePath().getParent();
+            if (folder != null) {
+                deleteOldLogFiles(folder, today);
+            }
+        } catch (RuntimeException e) {
+            System.out.println("Error deleting old log files -> " + e.getMessage());
         }
     }
 

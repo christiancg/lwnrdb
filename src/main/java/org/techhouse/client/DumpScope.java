@@ -93,7 +93,11 @@ public final class DumpScope {
 
     private static Map<String, List<String>> indexesOf(JsonObject statsReply) {
         final var found = new HashMap<String, List<String>>();
-        final var stats = statsReply.get("stats").asJsonObject();
+        final var statsElement = statsReply.get("stats");
+        if (statsElement == null || !statsElement.isJsonObject()) {
+            throw unexpectedReply("stats");
+        }
+        final var stats = statsElement.asJsonObject();
         for (final var database : objectsOf(stats, "databases")) {
             final var databaseName = Connection.stringOf(database, Requests.NAME);
             for (final var collection : objectsOf(database, COLLECTIONS)) {
@@ -109,6 +113,9 @@ public final class DumpScope {
         final var array = object.get(field);
         if (array != null && array.isJsonArray()) {
             for (final var element : array.asJsonArray()) {
+                if (!element.isJsonString()) {
+                    throw unexpectedReply(field);
+                }
                 strings.add(element.asJsonString().getValue());
             }
         }
@@ -120,9 +127,16 @@ public final class DumpScope {
         final var array = object.get(field);
         if (array != null && array.isJsonArray()) {
             for (final var element : array.asJsonArray()) {
+                if (!element.isJsonObject()) {
+                    throw unexpectedReply(field);
+                }
                 objects.add(element.asJsonObject());
             }
         }
         return objects;
+    }
+
+    static ClientException unexpectedReply(String field) {
+        return new ClientException("the server's reply has an unexpected " + field, ClientException.FAILED);
     }
 }

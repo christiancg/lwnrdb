@@ -1,8 +1,6 @@
 package org.techhouse.conn;
 
 import java.net.Socket;
-import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -11,11 +9,15 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.Client;
 import org.techhouse.data.Transaction;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.tx.TransactionBudget;
 
 public class ClientTracker {
     private static final String UNKNOWN_ADDRESS = "unknown";
@@ -25,6 +27,7 @@ public class ClientTracker {
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
     private final AtomicInteger socketClients = new AtomicInteger();
     private final Configuration configuration = Configuration.getInstance();
+    private final TransactionBudget transactionBudget = IocContainer.get(TransactionBudget.class);
 
     public UUID addClient(Socket socket) {
         final var maxConnections = configuration.getMaxConnections();
@@ -38,14 +41,22 @@ public class ClientTracker {
         return clientId;
     }
 
+    public int connectedClients() {
+        return socketClients.get();
+    }
+
     public void removeById(UUID clientId) {
-        clients.remove(clientId);
-        if (disconnectSignals.remove(clientId) != null) {
-            socketClients.decrementAndGet();
-        }
+        releaseBudgetOf(clients.remove(clientId));
+        releaseSocketSlot(clientId);
         final var departure = departures.remove(clientId);
         if (departure != null) {
             departure.countDown();
+        }
+    }
+
+    public void releaseSocketSlot(UUID clientId) {
+        if (disconnectSignals.remove(clientId) != null) {
+            socketClients.decrementAndGet();
         }
     }
 
@@ -75,7 +86,7 @@ public class ClientTracker {
             final var id = UUID.randomUUID();
             final var client = new Client("tx-forwarded");
             client.setAuthenticatedUsername(username);
-            client.setLastCommandTime(LocalDateTime.now());
+            client.setLastCommandNanos(System.nanoTime());
             clients.put(id, client);
             final var executor = Executors.newSingleThreadExecutor(Thread.ofVirtual().name("tx-session-", 0).factory());
             return new TxSession(id, executor, edgeNodeId);
@@ -85,7 +96,7 @@ public class ClientTracker {
     public void removeTxSession(String sessionId) {
         final var session = txSessions.remove(sessionId);
         if (session != null) {
-            clients.remove(session.clientId());
+            releaseBudgetOf(clients.remove(session.clientId()));
             session.shutdown();
         }
     }
@@ -115,6 +126,18 @@ public class ClientTracker {
     public Client.TransactionReap consumeTransactionReaped(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
         return client != null ? client.consumeTransactionReaped() : null;
+    }
+
+    public void markCommitRedriven(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.markCommitRedriven();
+        }
+    }
+
+    public boolean consumeCommitRedriven(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null && client.consumeCommitRedriven();
     }
 
     public void markRemoteSliceFenced(UUID clientId) {
@@ -167,8 +190,10 @@ public class ClientTracker {
 
     public long millisSinceLastCommand(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
-        final var last = client != null ? client.getLastCommandTime() : null;
-        return last == null ? 0 : Duration.between(last, LocalDateTime.now()).toMillis();
+        if (client == null || !client.hasCommanded()) {
+            return 0;
+        }
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - client.getLastCommandNanos());
     }
 
     public void updateLastCommandTime(UUID clientId) {
@@ -176,7 +201,7 @@ public class ClientTracker {
             return;
         final var client = clients.get(clientId);
         if (client != null) {
-            client.setLastCommandTime(LocalDateTime.now());
+            client.setLastCommandNanos(System.nanoTime());
         }
     }
 
@@ -235,6 +260,15 @@ public class ClientTracker {
         return client != null ? client.getOutbound() : null;
     }
 
+    public void forEachOutbound(BiConsumer<UUID, OutboundQueue> action) {
+        for (final var entry : clients.entrySet()) {
+            final var outbound = entry.getValue().getOutbound();
+            if (outbound != null) {
+                action.accept(entry.getKey(), outbound);
+            }
+        }
+    }
+
     public ReentrantLock getWriterLock(UUID clientId) {
         if (clientId == null)
             return null;
@@ -271,7 +305,17 @@ public class ClientTracker {
             return;
         final var client = clients.get(clientId);
         if (client != null) {
+            final var previous = client.getActiveTransaction();
             client.setActiveTransaction(transaction);
+            if (previous != transaction) {
+                transactionBudget.releaseOf(previous);
+            }
+        }
+    }
+
+    private void releaseBudgetOf(Client removed) {
+        if (removed != null) {
+            transactionBudget.releaseOf(removed.getActiveTransaction());
         }
     }
 

@@ -2,17 +2,22 @@ package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.fs.io.ChunkedChannelWrites;
 
 public class WalPlanTest {
     private static final String DB = "planDb";
@@ -65,6 +70,17 @@ public class WalPlanTest {
     }
 
     @Test
+    public void test_an_aborted_write_removes_the_page_file_it_created() throws Exception {
+        final var created = rf.fx.page(1);
+        makeReadOnly(rf.fx.paths.pkIndexFile(DB, COLL));
+
+        assertThrows(IOException.class, () -> rf.replace("b", "new-b", 1, PagePlacement.APPEND));
+
+        assertFalse(created.exists(), "a page the aborted write created is removed, not left empty without a row");
+        assertEquals(StorageFixture.record("b", "old-b"), rf.fx.readAt(rf.fx.indexed("b")));
+    }
+
+    @Test
     public void test_the_write_after_an_aborted_one_lands_where_the_log_says() throws Exception {
         makeReadOnly(rf.fx.page(0));
         assertThrows(IOException.class, () -> rf.replace("b", "new-b", 0, PagePlacement.APPEND));
@@ -88,9 +104,11 @@ public class WalPlanTest {
         assertEquals(StorageFixture.record("b", "old-b"), rf.fx.readAt(old), "the old copy is not blanked yet");
         assertTrue(readOnly.setWritable(true, true));
 
+        assertThrows(IOException.class, () -> rf.replace("c", "new-c", 1, PagePlacement.APPEND),
+                "the next write applies the logged blank first and is refused, having read before it");
         rf.replace("c", "new-c", 1, PagePlacement.APPEND);
 
-        assertTrue(rf.fx.readAt(old).isBlank(), "the next write applies the logged blank first");
+        assertTrue(rf.fx.readAt(old).isBlank(), "the logged blank was applied");
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
     }
 
@@ -114,6 +132,39 @@ public class WalPlanTest {
 
         assertTrue(rf.fx.readAt(old).isBlank());
         assertEquals(List.of(), decodedLog().records());
+    }
+
+    @Test
+    public void test_a_four_megabyte_record_is_written_in_chunks_and_replays_identically() throws Exception {
+        final var line = ReplacerFixture.line("big", "x".repeat(4 * 1024 * 1024));
+        final var lengthBefore = rf.fx.page(0).length();
+        final var plan = new WalPlan(rf.fx.paths, rf.fx.store, DB, COLL);
+        final var offset = plan.append(0, line);
+        plan.commit();
+        final var written = Files.readAllBytes(rf.fx.page(0).toPath());
+        assertEquals(lengthBefore, offset);
+        assertArrayEquals(line, Arrays.copyOfRange(written, (int) offset, written.length));
+        assertArrayEquals(line, decodedLog().records().getLast().changes().getFirst().bytes());
+
+        try (var page = FileChannel.open(rf.fx.page(0).toPath(), StandardOpenOption.WRITE)) {
+            page.truncate(lengthBefore);
+        }
+        WalRedo.replay(rf.fx.paths, DB, COLL, decodedLog());
+
+        assertArrayEquals(written, Files.readAllBytes(rf.fx.page(0).toPath()));
+    }
+
+    @Test
+    public void test_a_failed_pk_write_takes_back_a_multi_chunk_page_slice() throws Exception {
+        final var page = Files.readAllBytes(rf.fx.page(0).toPath());
+        final var records = decodedLog().records().size();
+        makeReadOnly(rf.fx.paths.pkIndexFile(DB, COLL));
+
+        assertThrows(IOException.class,
+                () -> rf.replace("b", "y".repeat(3 * ChunkedChannelWrites.CHUNK_BYTES), 0, PagePlacement.APPEND));
+
+        assertArrayEquals(page, Files.readAllBytes(rf.fx.page(0).toPath()), "every chunk of the page slice is cut");
+        assertEquals(records, decodedLog().records().size(), "the aborted record is not replayed");
     }
 
     @Test

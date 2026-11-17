@@ -13,6 +13,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,6 +26,7 @@ import org.techhouse.log.Logger;
 // The finer tier below ResourceLocking's collection locks, and what makes dirty reads safe: a
 // dirty read skips the collection lock but still serializes against each file's physical write.
 final class FileLocks {
+    static final long ABSENT = -1L;
     private static final Logger logger = Logger.logFor(FileLocks.class);
 
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
@@ -32,7 +34,6 @@ final class FileLocks {
     private static final byte CARRIAGE_RETURN = '\r';
     private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
     private static final int SCAN_CHUNK = 8192;
-    private static final byte LINE_END = (byte) Globals.NEWLINE.charAt(Globals.NEWLINE.length() - 1);
 
     private FileLocks() {
     }
@@ -90,11 +91,11 @@ final class FileLocks {
                         var writer = new BufferedWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8),
                                 Globals.BUFFER_SIZE)) {
                     if (midLine) {
-                        writer.newLine();
+                        writer.write(Globals.NEWLINE);
                     }
                     for (final var row : rows) {
                         writer.append(toLine.apply(row));
-                        writer.newLine();
+                        writer.write(Globals.NEWLINE);
                     }
                     writer.flush();
                     if (forced) {
@@ -167,12 +168,17 @@ final class FileLocks {
 
     static List<String> readAllLinesIfExists(File file) throws IOException {
         final var lock = lockRead(file);
+        var absent = false;
         try {
             return decodeLines(Files.readAllBytes(file.toPath()));
         } catch (NoSuchFileException e) {
+            absent = true;
             return null;
         } finally {
             lock.unlock();
+            if (absent) {
+                evictIfUnused(file);
+            }
         }
     }
 
@@ -185,13 +191,39 @@ final class FileLocks {
         }
     }
 
-    static byte[] readAllBytesLocked(File file) throws IOException {
+    static List<byte[]> readChunksLocked(File file, int chunkBytes) throws IOException {
         final var lock = lockRead(file);
-        try {
-            return Files.readAllBytes(file.toPath());
+        try (var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
+            return readChunks(reader, reader.length(), chunkBytes);
         } finally {
             lock.unlock();
         }
+    }
+
+    static List<byte[]> readChunks(RandomAccessFile reader, long measuredLength, int chunkBytes) throws IOException {
+        final var chunks = new ArrayList<byte[]>();
+        for (var remaining = measuredLength; remaining > 0;) {
+            final var chunk = readUpTo(reader, (int) Math.min(chunkBytes, remaining));
+            if (chunk.length == 0) {
+                break;
+            }
+            chunks.add(chunk);
+            remaining -= chunk.length;
+        }
+        return chunks;
+    }
+
+    private static byte[] readUpTo(RandomAccessFile reader, int length) throws IOException {
+        final var chunk = new byte[length];
+        var filled = 0;
+        while (filled < length) {
+            final var read = reader.read(chunk, filled, length - filled);
+            if (read < 0) {
+                return Arrays.copyOf(chunk, filled);
+            }
+            filled += read;
+        }
+        return chunk;
     }
 
     static int lineEnd(byte[] bytes, int start) {
@@ -251,6 +283,9 @@ final class FileLocks {
             content.writeTo(out);
             out.flush();
             SyncedWrites.content(file.getChannel(), tmp);
+        } catch (IOException | RuntimeException e) {
+            discardTemporary(tmp, e);
+            throw e;
         }
         moveIntoPlace(tmp, path);
     }
@@ -261,8 +296,19 @@ final class FileLocks {
         try (var out = new FileOutputStream(tmp.toFile())) {
             out.write(content);
             SyncedWrites.content(out.getChannel(), tmp);
+        } catch (IOException | RuntimeException e) {
+            discardTemporary(tmp, e);
+            throw e;
         }
         moveIntoPlace(tmp, path);
+    }
+
+    private static void discardTemporary(Path tmp, Exception cause) {
+        try {
+            Files.deleteIfExists(tmp);
+        } catch (IOException e) {
+            cause.addSuppressed(e);
+        }
     }
 
     static void moveIntoPlace(Path tmp, Path path) throws IOException {
@@ -271,13 +317,15 @@ final class FileLocks {
     }
 
     static void moveIntoPlaceUnsynced(Path tmp, Path path) throws IOException {
-        PageTails.forget(path.toFile());
+        PageLengths.forget(path.toFile());
         try {
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
             // ATOMIC_MOVE is not supported across filesystems or on every platform.
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
         }
+        ForceFailures.cleared(tmp);
+        ForceFailures.cleared(path);
     }
 
     static String separatorBeforeAppend(File file) throws IOException {
@@ -295,7 +343,7 @@ final class FileLocks {
     }
 
     static void cutUnterminatedTail(File file) throws IOException {
-        PageTails.forget(file);
+        PageLengths.forget(file);
         final var cut = file.exists() ? endOfLastCompleteLine(file) : -1L;
         if (cut < 0) {
             return;
@@ -315,7 +363,7 @@ final class FileLocks {
                 return -1;
             }
             reader.seek(length - 1);
-            if (reader.readByte() == LINE_END) {
+            if (reader.readByte() == LINE_FEED) {
                 return -1;
             }
             final var buffer = new byte[SCAN_CHUNK];
@@ -326,7 +374,7 @@ final class FileLocks {
                 reader.seek(start);
                 reader.readFully(buffer, 0, read);
                 for (var i = read - 1; i >= 0; i--) {
-                    if (buffer[i] == LINE_END) {
+                    if (buffer[i] == LINE_FEED) {
                         return start + i + 1;
                     }
                 }
@@ -336,16 +384,38 @@ final class FileLocks {
         }
     }
 
+    static boolean cutBackTo(File file, long length, String failureMessage) {
+        if (length == ABSENT) {
+            return removeCreated(file, failureMessage);
+        }
+        return !file.exists() || file.length() == length || truncateTo(file, length, failureMessage);
+    }
+
+    private static boolean removeCreated(File file, String failureMessage) {
+        PageLengths.forget(file);
+        try {
+            if (Files.deleteIfExists(file.toPath())) {
+                SyncedWrites.entriesOfLanded(file.getAbsoluteFile().getParentFile().toPath(),
+                        "Removing " + file.getName());
+            }
+            return true;
+        } catch (IOException e) {
+            logger.error(failureMessage, e);
+            return false;
+        }
+    }
+
     static boolean truncateTo(File file, long length) {
         return truncateTo(file, length, "Could not roll back the page append for " + file.getAbsolutePath()
                 + " after its index write failed; run REINDEX on this collection");
     }
 
     static boolean truncateTo(File file, long length, String failureMessage) {
-        PageTails.forget(file);
+        PageLengths.forget(file);
         try (var channel = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             channel.setLength(length);
             SyncedWrites.content(channel.getChannel(), file.toPath());
+            PageLengths.cut(file, length);
             return true;
         } catch (IOException e) {
             logger.error(failureMessage, e);

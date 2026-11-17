@@ -15,35 +15,35 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.test.RequiresDirectorySync;
+import org.techhouse.test.RequiresFileKeys;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
+@RequiresFileKeys
 public class WalRedoTest {
-    private static final String DB = "redoDb";
-    private static final String COLL = "redoColl";
+    private static final String DB = WalRedoFixture.DB;
+    private static final String COLL = WalRedoFixture.COLL;
 
     @TempDir
     File tmp;
 
     private PowerLossFixture power;
+    private WalRedoFixture redoFixture;
     private ReplacerFixture rf;
 
     @BeforeEach
     public void setUp() throws Exception {
         power = PowerLossFixture.install();
-        rf = new ReplacerFixture(tmp, DB, COLL);
-        for (final var id : List.of("a", "b", "c")) {
-            insert(id);
-        }
-        new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
+        redoFixture = new WalRedoFixture(tmp);
+        rf = redoFixture.rf;
     }
 
     @AfterEach
@@ -51,52 +51,37 @@ public class WalRedoTest {
         power.close();
     }
 
-    private void insert(String id) throws IOException {
-        rf.appender.insert(rf.entry(id, "old-" + id, 0), ReplacerFixture.line(id, "old-" + id));
+    private void insertAfterTheCheckpoint() throws IOException {
+        redoFixture.insert("d");
     }
 
     private List<PkIndexEntry> redo() throws IOException {
-        PowerLossFixture.restart(rf.fx.paths, DB, COLL);
-        return WalRedo.redoAll(rf.fx.paths);
+        return redoFixture.redo();
     }
 
     private File log() {
-        return rf.fx.paths.writeAheadLog(DB, COLL);
+        return redoFixture.log();
     }
 
     private Map<String, String> scanned() throws IOException {
-        final var values = new TreeMap<String, String>();
-        try (var entries = new DocumentPageStore(rf.fx.paths).streamEntries(DB, COLL)) {
-            entries.forEach(entry -> values.merge(entry.get_id(), entry.getData().get("v").asJsonString().getValue(),
-                    (first, second) -> first + "," + second));
-        }
-        return values;
+        return redoFixture.scanned();
     }
 
     private void assertHolds(Map<String, String> expected) throws IOException {
-        assertEquals(expected, scanned(), "a page scan answers every acknowledged write once");
-        final var indexed = new TreeMap<String, String>();
-        for (final var row : rf.fx.indexedRows()) {
-            indexed.put(row.getValue(), rf.fx.readAt(row));
-        }
-        final var records = new TreeMap<String, String>();
-        expected.forEach((id, value) -> records.put(id, StorageFixture.record(id, value)));
-        assertEquals(records, indexed, "the pk index points every id at its record");
+        redoFixture.assertHolds(expected);
     }
 
     private static Map<String, String> original() {
-        return Map.of("a", "old-a", "b", "old-b", "c", "old-c");
+        return WalRedoFixture.original();
     }
 
-    private Map<String, String> originalWith(String id, String value) {
-        final var expected = new TreeMap<>(original());
-        expected.put(id, value);
-        return expected;
+    private static Map<String, String> originalWith(String id, String value) {
+        return WalRedoFixture.originalWith(id, value);
     }
 
     @Test
     public void test_an_acknowledged_insert_survives_losing_its_page_and_pk_bytes() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         power.powerLoss();
         assertEquals(original(), scanned(), "the power loss took the unforced insert");
 
@@ -185,7 +170,7 @@ public class WalRedoTest {
 
     @Test
     public void test_replay_reports_every_id_written_since_the_checkpoint() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         rf.replace("b", "moved-b", 1, null);
         rf.replacer.delete(rf.fx.indexed("c"));
         power.powerLoss();
@@ -198,7 +183,7 @@ public class WalRedoTest {
 
     @Test
     public void test_a_replayed_log_keeps_its_records() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         power.powerLoss();
 
         redo();
@@ -208,24 +193,11 @@ public class WalRedoTest {
     }
 
     @Test
-    public void test_without_synced_writes_unlogged_bytes_are_kept() throws Exception {
-        final var page = rf.fx.page(0);
-        Files.writeString(page.toPath(), StorageFixture.record("z", "maybe-acknowledged"), StandardCharsets.UTF_8,
-                StandardOpenOption.APPEND);
-        final var landed = page.length();
-        TestUtils.setPrivateField(Configuration.getInstance(), "syncWrites", "false");
-
-        redo();
-
-        assertEquals(landed, page.length(), "unsynced, those bytes may be an acknowledged write whose record was lost");
-    }
-
-    @Test
     public void test_a_torn_last_record_is_dropped() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         power.powerLoss();
         final var bytes = Files.readAllBytes(log().toPath());
-        Files.write(log().toPath(), Arrays.copyOf(bytes, bytes.length - 3));
+        Files.write(log().toPath(), Arrays.copyOf(bytes, (int) OutsideWrites.logEnd(log()) - 3));
 
         redo();
 
@@ -235,7 +207,7 @@ public class WalRedoTest {
 
     @Test
     public void test_redo_twice_ends_the_same() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
         power.powerLoss();
         final var log = Files.readAllBytes(log().toPath());
@@ -252,7 +224,7 @@ public class WalRedoTest {
 
     @Test
     public void test_an_interrupted_checkpoint_replays_safely() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         final var group = new ForceGroup();
         group.add(rf.fx.page(0).toPath());
         group.add(rf.fx.paths.pkIndexFile(DB, COLL).toPath());
@@ -265,27 +237,8 @@ public class WalRedoTest {
     }
 
     @Test
-    public void test_a_clean_log_replays_nothing_and_stays_a_checkpoint() throws Exception {
-        final var before = Files.readAllBytes(rf.fx.page(0).toPath());
-
-        assertEquals(List.of(), redo());
-
-        assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, WalCodec.decodeAll(Files.readAllBytes(log().toPath())).framesSinceCheckpoint());
-    }
-
-    @Test
-    public void test_a_log_without_a_checkpoint_is_left_alone() throws Exception {
-        Files.write(log().toPath(), new byte[]{1, 2, 3});
-
-        assertEquals(List.of(), redo());
-
-        assertHolds(original());
-    }
-
-    @Test
     public void test_a_log_in_a_quarantined_folder_is_not_replayed() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         power.powerLoss();
         final var folder = rf.fx.paths.collectionFolder(DB, COLL);
         final var aside = new File(folder.getParentFile(), COLL + Globals.QUARANTINE_INFIX + "1");
@@ -319,7 +272,7 @@ public class WalRedoTest {
         final var pk = rf.fx.paths.pkIndexFile(DB, COLL);
         wal.openGroup(DB, COLL);
         rf.replace("a", "new-a", 0, PagePlacement.APPEND);
-        final var firstRecordEnd = log().length();
+        final var firstRecordEnd = OutsideWrites.logEnd(log());
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
         power.powerLoss(Map.of(log(), firstRecordEnd, page, page.length(), pk, pk.length()));
 
@@ -343,7 +296,7 @@ public class WalRedoTest {
             }
         });
         try {
-            insert("d");
+            insertAfterTheCheckpoint();
             new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
         } finally {
             WriteAheadLog.guardWith(original);
@@ -416,7 +369,7 @@ public class WalRedoTest {
 
     @Test
     public void test_an_index_line_lost_with_its_record_is_named_for_repair() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         final var idxlog = appendIndexLineOfD();
         power.powerLoss();
         assertFalse(idxlog.exists() && Files.readString(idxlog.toPath(), StandardCharsets.UTF_8).contains("d"),
@@ -430,7 +383,7 @@ public class WalRedoTest {
 
     @Test
     public void test_a_checkpoint_makes_the_index_lines_it_drops_the_records_of_durable() throws Exception {
-        insert("d");
+        insertAfterTheCheckpoint();
         final var idxlog = appendIndexLineOfD();
         new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
         power.powerLoss();

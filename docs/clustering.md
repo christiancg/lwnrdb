@@ -1,1058 +1,387 @@
 # Clustering
 
-Multi-node LWNRDB: a set of **fully-replicated** nodes with a **distributed cache**. Data
-lives on every node; only the cache and write coordination are partitioned, so aggregate
-cache capacity scales with the number of nodes instead of requiring one large machine.
+Several LWNRDB nodes can run as one cluster. Every node holds all the data, so losing a node never loses data, and a
+client can talk to any node. What is split between the nodes is the work: each collection has one owner node that
+coordinates its writes and keeps it in cache, so the cache of the whole cluster is the sum of the nodes' caches.
 
-Everything here is gated by `clusterEnabled`. With `clusterEnabled=false` (the default) a
-node behaves exactly as a standalone server, with no behaviour change on any path.
+With `clusterEnabled=false`, the default, none of this applies and a node is a plain standalone server.
 
-> **Residual future work:** fully non-blocking admin-coordinator handoff, and
-> consensus-durable 2PC decisions so a prepared transaction is never left in-doubt when its
-> coordinator *and* all peers are uncertain (today an operator resolves that rare case with
-> `RESOLVE_TRANSACTION`).
+The cluster is eventually consistent, with last-write-wins per document. It is not linearizable.
+[What the cluster guarantees](#what-the-cluster-guarantees) says exactly what that means.
+
+## Setting up a cluster
+
+Each node needs at least this in its `lwnrdb.cfg`:
+
+```
+clusterEnabled=true
+clusterPort=9990
+clusterAdvertisedAddress=10.0.0.11
+clusterSeeds=10.0.0.10:9990
+clusterSecret=change_this_to_a_shared_secret_of_32_plus_characters
+clusterExpectedSize=3
+```
+
+- `clusterAdvertisedAddress` is the address other nodes use to reach this one. It defaults to `127.0.0.1`, so set it.
+- `clusterSeeds` lists one or more running nodes as `host:port`. Leave it empty on the first node.
+- `clusterSecret` is the same on every node and must have at least 32 characters, or the node refuses to start.
+- `clusterExpectedSize` is the number of nodes you plan to run. It must be at least 2, and it is the floor for the
+  write majority (see [Write path and quorum](#write-path-and-quorum)).
+- `nodeId` can stay empty. The node then generates one on its first start and keeps it in `cluster/node.id` under its
+  data folder.
+
+For TLS between nodes set `clusterTlsEnabled=true`. It uses the same PKCS12 keystore as client TLS (`tlsKeystorePath`)
+and it is mutual: every node presents the keystore's certificate and only accepts peers whose certificate that keystore
+trusts. So every node needs the same keystore, or certificates from the same CA. A clustered node without TLS logs a
+`SECURITY WARNING` at every start.
+
+Every node must run the same build. There is no negotiation between versions, and nodes on different builds don't form
+a cluster.
+
+`scriptsEnabled` and the `script*` sandbox keys must be the same on every node, because a script runs with the settings
+of whichever node it was placed on. Keep `schemaMaxPatternLength` and `schemaMaxPatterns` equal too. The rest of the
+cluster keys, with their defaults and limits, are in the [configuration table](operations.md#configuration).
 
 ## Topology: per-collection ownership
 
-There is **no single master**. Every collection is consistent-hashed to an **owner node**,
-and ownership is spread across all nodes — one owner per collection. The owner is both the
-collection's **cache home** (reads route there) and its **write coordinator** (writes route
-there, are serialized by the existing per-collection lock, then replicated). A client may
-connect to **any** node, which transparently routes to the owner.
+There is no master. Each collection is mapped to an owner with a consistent hash ring built from the nodes that are
+alive (`virtualNodesPerNode` points per node, 128 by default). Every node builds the same ring from the same
+membership, so there is no election, and when a node joins or leaves only the collections next to it on the ring move.
 
-### What the cluster actually guarantees
+The owner of a collection:
 
-The delivered model is **eventual consistency with per-document last-write-wins**, not
-linearizability. Ownership is derived from each node's own gossip view, and nothing agrees on a
-total order of views, so two nodes can briefly disagree about who owns a collection.
+- coordinates every write to it and replicates it to the other nodes;
+- answers its reads, so it is the only node that keeps that collection in cache;
+- fires its triggers and runs its before-write hooks.
 
-Three mechanisms bound the damage rather than eliminate the disagreement:
+The same ring also picks the node that fires each schedule, and the admin coordinator, the one node that serializes
+schema and user changes (see [Admin and DDL replication](#admin-and-ddl-replication)).
 
-- **A hybrid logical clock** (`cluster/HybridClock`) supplies every write version: 48 bits of
-  physical milliseconds and 16 bits of logical counter packed into one `long`, seeded at startup
-  from the highest version on disk and advanced by every version received from a peer. This is
-  what makes "newer" well-defined across nodes and across restarts.
-- **An ownership re-check under the lock.** `guardWrite` runs before the collection lock is taken,
-  so ownership can move while a write waits for it. The write handlers therefore re-check
-  `isOwner` *after* acquiring the lock and refuse with `421-1` if it moved, and a write that
-  commits locally but can no longer be replicated answers `503-8` (outcome unknown) rather than
-  `OK` — that silent success was the defect this closes. It is not `421-1`, because the write did
-  apply here and anti-entropy spreads it: `421-1` would tell the client it was not applied, the
-  same lie the admin path already refuses to tell. A `DELETE` is checked once more when it reserves its
-  tombstone, after its before-hook ran: if ownership moved by then it answers `421-1` without
-  deleting, because a local delete with no tombstone would be undone by anti-entropy while its
-  `DELETED` trigger still fired.
-- **Version-checked applies**: a replica refuses any upsert or delete older than what it stores,
-  which makes an out-of-order arrival and a stale anti-entropy decision harmless.
-
-**The transaction commit path deliberately keeps that silent success, and this is not an oversight.**
-A commit whose ownership moved between the pre-commit check and `replicateTransaction` ships nothing
-and still answers OK, where the equivalent `SAVE`/`DELETE` answers `503-8`. Reporting it was tried
-and reverted: `entries.isEmpty()` conflates three cases, and only one is a defect — an edge
-coordinator whose slice was forwarded legitimately owns nothing locally, and a forwarded 2PC
-participant legitimately touches collections it does not own, so both would have been reported as
-failures. Telling them apart needs ownership context from *before* the commit point, which
-`replicateTransaction` does not have. The write itself is not lost: it carries the highest version,
-so anti-entropy propagates it. Only the acknowledgement is stronger than what happened.
-
-The residual is two nodes holding genuinely concurrent, incomparable views. The re-check narrows
-the window — an owner notices the loss before it writes — but cannot close it, because nothing
-orders the two views against each other. Resolving that needs consensus, which this design does not
-introduce; a write accepted under such a split is reconciled by last-write-wins rather than
-rejected.
-
-A ring-generation fencing token was tried and removed: a generation is a *per-node* counter, so a
-replica comparing a coordinator's value against its own is comparing unrelated numbers, and in
-testing it refused legitimate replication outright. A correct fence would have to compare something
-both ends can evaluate — ownership by node id — and has not been designed.
-
-A cluster must also run a single build throughout: there is no mixed-version negotiation, and data
-written by an older build is not carried forward.
+A new owner doesn't copy anything, since every node already has every document. It just warms its cache as the reads
+come in.
 
 ## Membership and discovery
 
-- Each node has a stable `nodeId` (configured, or auto-generated and persisted to
-  `filePath/cluster/node.id`).
-- A joining node contacts one or more `clusterSeeds` (`host:port`) with a `JOIN_REQUEST`
-  and receives the current membership.
-- Nodes then **gossip** their full membership view plus a monotonically increasing
-  **heartbeat counter** every `gossipIntervalMs`.
-- **Failure detection** is heartbeat-based: a node whose heartbeat has not advanced within
-  `suspectTimeoutMs` is `SUSPECT`, and within `deadTimeoutMs` is `DEAD`. A node whose
-  heartbeat advances again is restored to `ALIVE`. Merging prefers the higher
-  `incarnation`, then the higher heartbeat, so state converges regardless of gossip order.
-- **Probing**: a `SUSPECT` or `DEAD` peer is not skipped. Every `deadProbeIntervalMs` it is sent an
-  ordinary gossip message, off the round's critical path so an unreachable peer never lengthens a
-  tick. Without this, two nodes that each marked the other `DEAD` during a partition would never
-  contact each other again: neither would send, and a heartbeat only travels in gossip. Whichever
-  probe arrives first carries a fresher heartbeat, so the receiver restores the sender and its reply
-  restores the receiver.
+A new node contacts its seeds, gets the member list from them, and from then on gossips with the others every
+`gossipIntervalMs` (1 second). Every gossip carries a heartbeat counter. A node whose heartbeat doesn't move for
+`suspectTimeoutMs` (5 seconds) becomes suspect, and after `deadTimeoutMs` (15 seconds) it is dead and its collections
+go to the other nodes. As soon as its heartbeat moves again it is alive and gets them back.
 
-Gossip also carries per-node telemetry — script load and script capacity, used for script
-placement, and the admin catch-up signal `adminSyncing`. Adopting a peer's new telemetry deliberately
-does **not** count as a membership change: firing the membership listeners every round
-would rebuild the ownership ring and re-run anti-entropy for nothing.
+Dead nodes are still probed every `deadProbeIntervalMs`, so the two halves of a healed partition find each other again.
+A node nobody has heard from for `deadEvictionMs` (24 hours) is dropped from the member list. Until then it still
+counts toward the size of the cluster.
 
-Membership listeners are notified from the gossip tick and from the handlers answering a peer's
-`GOSSIP`/`JOIN_REQUEST`, one notification at a time: the change flag, the view snapshot and every
-listener run under one lock, so the last view a listener applies always includes every member merged
-before it.
-
-## Ownership and the hash ring
-
-`HashRing` places `virtualNodesPerNode` virtual points per **ALIVE** node on a SHA-256
-ring; `OwnershipManager.ownerFor(db, coll)` hashes the `db|coll` key to the next point
-clockwise. All nodes compute the same ring from the same membership, so ownership needs no
-election, and virtual nodes keep reassignment minimal when membership changes. A reserved
-ring key elects the **admin coordinator**, and schedules are hashed onto the same ring
-under `{db}|.schedules|{name}` — no separate ring or coordinator role for either.
+Gossip also carries each node's script load and whether it is still catching up on admin metadata, which is what
+script placement looks at.
 
 ## Write path and quorum
 
-A document write (`SAVE`/`BULK_SAVE`/`DELETE`) is coordinated by the owner:
+A `SAVE`, `BULK_SAVE` or `DELETE` goes to the collection's owner, which:
 
-1. **Guard, before commit.** If this node lacks a write quorum it returns
-   `503-2 NO_QUORUM`; if it is not the owner it returns `421-1 NOT_COLLECTION_OWNER` with
-   the owner's address. (Request routing normally forwards to the owner rather than
-   reaching this rejection — it is the backstop for a direct-to-non-owner write.)
-2. **Local commit.** The owner takes the collection write lock and commits through the
-   normal execute path. Concurrent single-document `SAVE`s and `DELETE`s on one owner share
-   one group commit, exactly as standalone: one log force for the whole group, taken under
-   the exclusive lock. Each writer still re-checks ownership and reserves its own delete
-   tombstone; a group whose force fails is taken back and retracts those tombstones.
-3. **Replicate.** Still holding the lock, the owner re-reads the committed document(s) and
-   broadcasts a `REPLICATE` to all ALIVE peers in parallel, waiting for a **majority** to
-   ack within `replicationAckTimeoutMs`. A group ships once, after its force: one
-   `REPLICATE` for its final documents (or its deletes), or one single-collection
-   `REPLICATE_TX` with the deletes first and then the upserts when it mixes both, so an id
-   saved and deleted inside the group ships only its delete. During that wait the owner
-   holds the collection lock shared: point reads (`FIND_BY_ID`) proceed and may see the
-   group's writes before the quorum acknowledged them, while scans, LISTEN re-runs and other
-   writers wait until the `REPLICATE` returns. Every write of the group gets the outcome:
-   `503-3` on a timeout, `503-8` when ownership moved meanwhile; a write refused before it
-   applied keeps its own code. The owner counts as one vote, so it needs
-   `majority − 1` peer acks, where
-   `majority = ⌊max(clusterExpectedSize, knownMembers) / 2⌋ + 1`.
-4. **Ack or timeout.** On a majority the client gets `OK`. On timeout it gets
-   `503-3 REPLICATION_TIMEOUT`; the **local commit still stands** and lagging replicas are
-   reconciled by anti-entropy.
+1. refuses with `503-2` if it can't see a majority of the cluster, or with `421-1` if it isn't the owner (requests are
+   routed to the owner beforehand, so this only happens when ownership has just moved);
+2. commits the write locally, the same way a standalone server does, write-ahead log and group commit included;
+3. sends it to every live node and waits up to `replicationAckTimeoutMs` (5 seconds) for a majority to acknowledge it;
+4. answers `OK` once a majority has it.
 
-Replicas apply an inbound `REPLICATE` through `ReplicatedApplyHelper`, reusing the same
-execute helpers under the collection write lock. They never re-replicate, because
-replication is triggered only from the owner's write handlers — the same seam rule that
-keeps a replica from re-firing triggers.
+The majority is `floor(max(clusterExpectedSize, known nodes) / 2) + 1`, and the owner counts as one. A dead node is
+still known until it is evicted, so a three-node cluster with one node down still needs both survivors.
 
-The quorum gate is also what makes ownership handoff safe: a node in a **minority
-partition** cannot reach a majority, so it cannot commit divergent writes.
+If the majority doesn't answer in time the client gets `503-3`. The write is not undone: it stays on the owner and on
+the replicas that got it, and anti-entropy spreads it to the rest. If ownership moved while the write waited, the
+answer is `503-8` for the same reason. Both mean the outcome is unknown, not that the write failed. Sending a write
+with an `_id` again is safe, but sending a `SAVE` without one again stores the document twice.
+
+While a group of writes waits for its acknowledgements, lookups by id on the owner can already see them. Scans and
+other writers wait until replication is done.
+
+A node on the minority side of a partition can't reach a majority, so it can't accept writes, and the two sides can't
+diverge.
+
+Replicas apply what the owner sends them but never pass it on, and they never fire triggers for it.
 
 ## Request routing and the distributed cache
 
-After authenticating and authorizing a request, the edge node consults `ClusterRouter`:
-for a per-collection operation (`SAVE`/`BULK_SAVE`/`DELETE`/`FIND_BY_ID`/`AGGREGATE`) it
-does **not** own, it forwards the raw request JSON to the owner in a `FORWARD_REQUEST` and
-relays the owner's response verbatim. The owner executes the forwarded request through
-`OperationProcessor` directly, bypassing the router — so there is no forward loop, and a
-forwarded write still passes the owner's ownership/quorum guard and replication.
+After authenticating and checking permissions, a node forwards `SAVE`, `BULK_SAVE`, `DELETE`, `FIND_BY_ID` and
+`AGGREGATE` on a collection it doesn't own to that collection's owner, and relays the answer unchanged. The owner runs
+the request with all its own checks, so a forwarded write still needs the owner's quorum.
 
-Routing a **read** to the owner is what makes the cache distributed: only the owner keeps
-that collection resident, so total cache capacity is the sum of the nodes' budgets. If the
-owner is unreachable and `readFallbackToLocal=true`, the edge serves the read from its own
-complete on-disk replica instead of failing; a write to an unreachable owner returns
-`503-4 OWNER_UNREACHABLE`.
+Sending reads to the owner is what makes the cache distributed: only the owner keeps a collection in memory.
 
-A forwarded write can also arrive at the owner **before the collection does**: admin replication
-only waits for a quorum, and the collection's owner need not be in that quorum, so a client that
-creates a collection and immediately writes to it can beat the `CREATE_COLLECTION` to the owner.
-That write is refused with a retryable `503-10 COLLECTION_NOT_READY` rather than being attempted
-and failing on the missing page folder. A clustered node deliberately never answers `404-11
-COLLECTION_NOT_FOUND` for this, because it cannot tell a collection that was never created from
-one whose metadata has not reached it yet — only a node with clustering off can make that call.
+When the owner can't be reached, a read is served from the local copy if `readFallbackToLocal` is on (the default),
+and that copy may be a little behind. A write answers `503-4`. An owner that was reached but didn't answer in time
+also gives `503-4`, reads included, because the local copy might be behind. Clients retry `503-4`.
 
-A forwarded body travels as raw JSON text in the `forwardBody` string: EJson escapes every
-string value (RFC 8259, quotes, newlines, control characters and lone surrogates included), so the
-body round-trips inside the outer frame unchanged. The owner parses it with
-`RequestParser.parseRequest(String)` (nesting limit kept) and the edge relays the response string
-verbatim. Peer frames (`ClusterMessage` and the payloads inside it) are annotated with `ejson/NullsOmitted`,
-so the reflection serializer leaves their unset fields out instead of writing a `null` for every
-envelope field; a missing key reads back as the field's default. Client responses still emit every
-field.
+A client that creates a collection and writes to it right away through another node can get there before the
+collection does, since admin changes only wait for a majority. That write answers `503-10`, which is retryable. A
+clustered node never answers "collection not found" in that case, because it can't tell a missing collection from one
+it hasn't heard of yet.
 
 ### Joins across collections
 
-Routing is decided **once**, at the edge, on the request's *primary* collection — there is
-no per-step routing. So an `AGGREGATE` on collection **A** (owned by X) that `JOIN`s
-collection **B** (owned by Y) is forwarded whole to X, and X reads B from its own local
-replica. This works because data is fully replicated, and it is inherent to per-collection
-ownership: no single node owns both A and B in general, so *some* joined collection is
-always read from a non-owner replica wherever the request goes. Two consequences:
-
-- **Cache distribution is partially eroded for joined collections.** X caches B even though
-  Y is B's cache home, so a frequently-joined collection ends up resident on more than one
-  node. "One cache home per collection" holds for each query's primary collection, not its
-  join targets.
-- **The joined side is read at replica consistency.** X is authoritative for A but only a
-  replica for B, so a join can combine an authoritative primary with a possibly-slightly-
-  stale joined collection if a write to B is mid-replication and X was not in the acked
-  majority.
-
-## Scripts
-
-A script has no single owner to route to — it is scoped to a database but may touch any
-number of collections in it, owned by different nodes. So `RUN_SCRIPT` and `CALL_PROCEDURE`
-are **placed** instead: `ClusterRouter` picks a live node by current script load blended
-with how much of that database the node owns, forwards the whole run there, and relays the
-response verbatim. This is on by default (`scriptRoutingEnabled=true`) so one node cannot
-end up running every script in the cluster just because a load balancer sent it every
-connection; `false` restores executing on the node that received the request.
-
-**How the node is chosen.** `cluster/ScriptPlacement.choose(databaseName)` uses **power of
-two choices**: sample two distinct eligible members at random and take the better one,
-scored as
-
-```
-score = (scriptLocalityWeight / 100) * share - loadRatio        higher wins
-```
-
-`loadRatio` is load relative to the node's `maxConcurrentScripts` rather than absolute (a
-node at 3/4 is nearly full where one at 6/32 is idle). `share` is the fraction of the
-scoped database's collections the candidate owns, computed per placement from admin
-metadata already in memory and the ring already in memory — no new wire field, no extra
-round trip, and deliberately not cached, since a few ring lookups are microseconds against
-a run measured in milliseconds. Saturation is checked **before** the score: a sample
-already at its cap loses outright, because it could only answer `503-6`. A pair nothing
-separates goes to the first of the two samples, which — since the pair is drawn as an
-ordered pair — is uniform over the eligible set. A stable order such as `nodeId` would make
-two edges sampling the same pair agree, but at the cost that matters more: gossip refreshes
-`scriptLoad` once per `gossipIntervalMs` and a short script is long over by then, so on an
-idle cluster every pair ties and a stable order would send every run to the same node and
-never once to the node that sorts last.
-
-Sampling rather than picking the global best is what avoids herding: every edge sees the
-same gossiped view, stale by up to one `gossipIntervalMs`, so a global minimum would send
-them all to the same node at once. `scriptLocalityWeight` (0–100, default 50) is a
-percentage of the load ratio; **`0` reproduces load-only ordering exactly**, which is what
-makes the blend safe on by default. Read the default as *a node owning the whole database
-beats an idle rival until it is itself more than half full* — locality cannot herd either,
-because as the owner's load ratio climbs past `weight / 100` the score inverts. Since each
-node places using its own view, this key is a **local** decision and need not be uniform
-across the cluster.
-
-**Eligibility** requires both: `ALIVE` in the local view, and not still catching up on admin
-metadata (`adminSyncing`, gossiped until the node's first admin anti-entropy round completes).
-The second matters because a node that has just started may not hold the
-`CREATE_DATABASE`/`SAVE_PROCEDURE` the caller depends on, and a script placed there would fail
-with a transient `404-4`/`404-8` a local run would never have hit. Admin records are shipped to
-every peer, but the coordinator waits only for a majority, so a peer that missed one (a dropped
-connection, a lock that stayed held) can still answer that way until its next admin
-anti-entropy round; that window is the residual cost of placing scripts at all. This node itself
-is always a candidate.
-
-**A script runs at most once.** Only one failure falls back to running here: the target
-could not be *connected to*, which proves the request never went on the wire. Every other
-failure — a timeout, a reset mid-request, an `ERROR` reply (which the peer also sends when
-its handler threw partway through) — leaves the target possibly still executing, and
-running the script here as well would apply its writes twice. A duplicated inventory
-decrement is a wrong answer no later read can detect, so those answer `503-7` instead and
-leave retrying to the caller, who alone knows whether the script is idempotent. The two
-outcomes are counted apart in `GET_DATABASE_STATS`: `forwardFallbacks` ran the work exactly
-once somewhere, `outcomeUnknown` may have run it on the target and reported nothing. A
-`503-6` from the chosen node is neither: it is a real response and is relayed verbatim,
-since falling back would route around the very cap protecting the target. A forwarded script is
-given the whole script budget, so the forward waits `scriptTimeoutMs +
-replicationAckTimeoutMs` rather than the ack timeout sized for a single write. No loop is
-possible: the target runs the script through `OperationProcessor` directly.
-
-Authorization is decided at the edge and re-checked on the target. The acting username travels
-on the forward, and the target re-validates the request and re-runs the permission check for that
-user against its own admin cache, so a permission granted a moment ago may answer one `403-1` (or a
-user created a moment ago one `401-2`) on a node that has not applied it yet; a client that grants
-and then immediately uses a permission through a different edge may need one retry. Script-run
-history writes carry no user and are exempt from the permission check, though their names are
-still validated. The acting user is asserted by the sender: anyone with the cluster secret can
-name any user, so the secret and `clusterTlsEnabled` remain the trust boundary. The target then
-runs as the original user. `scriptsEnabled` and the `script*` sandbox keys must
-therefore be **uniform across the cluster** — the sandbox comes from the *executing* node's
-configuration, and a target with `scriptsEnabled=false` answers `403-2`, which the edge
-relays.
-
-**The trade-off is locality.** Placement spreads interpreter CPU; it does not move the
-script to its data. Each operation the script issues is still routed normally (forwarded to
-its collection's owner, with `db.transaction` spanning owners through the same 2PC the wire
-protocol uses), so a forwarded script pays one round trip per operation against a collection
-its host does not own. `scriptLocalityWeight` narrows that — on a database of a few
-collections the preferred node usually owns all of them — but it cannot close the gap on a
-wide database, where consistent hashing gives every node about the same share.
-
-A **pipeline script** (a `SCRIPT` operator or `REDUCE` step inside an `AGGREGATE`) is the
-exception and needs no placement at all: the `AGGREGATE` is forwarded to the collection's
-owner as usual, so the script runs beside the data it filters. It has no `db` module and
-issues no operations of its own, so there is nothing to round-trip.
-
-**Visibility and cancellation are cluster-wide.** The admin-only `LIST_SCRIPTS` and
-`CANCEL_SCRIPT` run on the node that receives them and fan out to every live member — they
-are deliberately not routable, or a listing would only ever describe one node. A run is
-reported on the node **executing** it, with that node's address, so `LIST_SCRIPTS` on B
-shows a run A is executing. `CANCEL_SCRIPT` cancels locally first and broadcasts only when
-the run is elsewhere. An unreachable peer is logged and skipped rather than failing the
-listing, so a run on a partitioned node is invisible and uncancellable until it is
-reachable again. The count `LIST_SCRIPTS` reports and the load placement acts on come from
-the same registry, so they cannot disagree.
-
-`GET_DATABASE_STATS` reports placement per node under `scripts`: `routingEnabled`,
-`running`, `forwarded`, `forwardFallbacks`, `outcomeUnknown`, `localityWeight`,
-`localityPreferred` and `cancelled`.
-
-## Stored procedures and triggers
-
-Procedure and trigger DDL (`SAVE_PROCEDURE`, `DELETE_PROCEDURE`, `SAVE_TRIGGER`,
-`DELETE_TRIGGER`) is admin DDL: serialized by the admin coordinator, quorum-guarded,
-replicated by **shipping the definition file** the coordinator wrote, versioned by its
-`writeVersion`, and carried on the admin snapshot so a node that was down for the op catches up
-on rejoin (see *Admin and DDL replication*).
-
-Shipping the file rather than re-executing the op is what keeps the derived fields identical
-everywhere — `version`, `updatedAt`, `updatedBy` and, for a trigger or schedule, `definer`. A
-peer never computes them, so it can neither disagree about a trigger's definer (which would run
-the same write under different authority depending on which node owns the collection) nor be
-told one by a client: a client request is always stamped from the acting user and local state.
-
-The same goes for the check that refuses `SAVE_PROCEDURE`/`DELETE_PROCEDURE` with `403-4` when a
-trigger, before hook or schedule of another definer reaches the procedure (see
-[simplejs.md](simplejs.md), *Triggers*): an edge forwards the raw request with its acting user, the
-handler runs the check once on the admin coordinator under that database's procedures lock, and
-peers install the resulting file without re-checking.
-
-`CALL_PROCEDURE` is placed exactly like `RUN_SCRIPT` (see *Scripts*).
-
-A **trigger fires only on the collection's owner**, because `TriggerHelper` is called from
-`OperationProcessor`'s write handlers while a replica applies a `REPLICATE`/`REPLICATE_TX`
-through the replicated-apply helpers, which bypass it. The cascade bound holds across nodes
-too: `triggerDepth` rides on the request (not a `ThreadLocal`, which would reset on the
-node a write is forwarded to), the cluster forward paths preserve it, and the edge zeroes
-it for client requests.
-
-A **before-write hook** likewise runs on the owner: the edge forwards raw request JSON, so
-an edge-side mutation would be discarded in transit, and the owner is where the write lock
-that makes the decision binding is held.
-
-## Scheduled procedures
-
-A schedule is hashed onto the **existing** ring under `{db}|.schedules|{name}`, so
-`OwnershipManager.isOwner` answers whether this node should fire it — no new ring key kind,
-no new coordinator role. That spreads schedules across the cluster and hands them off
-automatically on a membership change, exactly as a collection's ownership does. With
-clustering off there is no ring, so the scheduler runs everything locally.
-
-`SAVE_SCHEDULE`/`DELETE_SCHEDULE` are admin DDL on the same terms as trigger DDL above,
-and installing or removing a schedule record also reloads that database's registry so the
-scheduler picks a change up without waiting for `scheduleRefreshMs`.
-
-**Firing is gated on quorum as well as ownership.** `OwnershipManager.ring` is rebuilt from
-`view.aliveNodeIds()`, so a partitioned minority node's ring contains only itself and it owns
-*every* schedule in every database. `ScheduleExecutor.isOwner` therefore checks
-`hasQuorum()` before `isOwner(...)`, in the same order as `ClusterCoordinator.guardWrite`.
-Script database writes were already contained — they go through `processMessage` and are
-refused `503-2` — but `fetch` is not, so without the quorum gate an external HTTP call ran on
-both sides of a partition.
-
-**Handoff skips a tick rather than duplicating one.** A new owner computes the next
-*future* occurrence, so an instant the previous owner may already have run is never
-replayed. That, plus the quorum gate above, is the whole guarantee, and it is why `nextRunAt`
-lives only in memory: persisting a `lastRunAt` would mean an admin write per run and would
-churn the schedule's admin record for no benefit. **It is not at-most-once in general.** During gossip
-convergence after any join or leave, two nodes hold different `aliveNodeIds()` and can each
-believe they own the same ring key while both hold quorum, so the same occurrence can fire
-twice. Closing that needs a durable claim, which the memory-only `nextRunAt` deliberately
-rules out; a job that must not run twice has to be idempotent. The cost is the other side of the same coin — a membership
-change during a tick can drop that tick, and **missed runs while a node was down are
-skipped, not caught up**.
-
-## Ownership-partitioned metadata caches
-
-A trigger only ever fires on its collection's owner, and a schedule only fires on its own,
-so a node has no use for the trigger lists or schedules of things it does not own.
-`cluster/MetadataCachePruner` — a `MembershipListener` registered immediately after
-`OwnershipManager`, since listeners fire in registration order and it must read the rebuilt
-ring — drops exactly those on every membership change. The caches are derived from files
-every node has, so handoff costs the new owner one lazy re-read and nothing is lost.
-Entries are **dropped, never blanked**: the dispatcher looks the list up again when it runs
-a queued event, and a cached empty list would make an in-flight trigger silently not fire.
-
-For the same reason admin anti-entropy does not read through the cache: building a snapshot
-and comparing records load procedures, triggers, schemas and schedules straight from disk, and
-installing a record *invalidates* the cache rather than populating it — otherwise every sweep
-would pull every procedure source on the node into memory regardless of what anyone had called.
-
-## Pending trigger runs are node-local
-
-`admin/trigger_runs` is not replicated. A node recovers its own pending runs when it
-restarts, the way each participant recovers its own `admin/transactions` markers. A node
-that never comes back keeps its pending runs on its own disk where no survivor can see
-them: those runs are **lost, not double-applied**. Extending exactly-once across permanent
-node loss would mean quorum-replicating each run record before its events are queued — a
-network round trip on the write path — and is deliberately not implemented. Best-effort
-replication is not an acceptable substitute: a lost completion notification would resurrect
-a consumed run and double-apply it, which is the failure the design exists to prevent.
-
-Because the record is local, the op that consumes it is always buffered in the firing node's own
-slice, and that slice is always part of the commit: a trigger whose body writes only to collections
-other nodes own commits through 2PC with the firing node as a participant, so the run's effects and
-the deletion of its record still land together.
-
-## Admin and DDL replication
-
-Admin and DDL operations mutate cluster-wide metadata rather than one collection's
-documents, so they are not per-collection hash-owned. A single **admin coordinator** — the
-owner of a reserved ring key, chosen and handed off by the same consistent-hash and
-membership machinery — serializes them:
-
-1. A non-coordinator node **forwards** the op to the coordinator, carrying the
-   authenticated acting username, which the coordinator applies through a short-lived
-   synthetic client so `CREATE_DATABASE` records the creator as owner.
-2. The coordinator **executes it locally**, then ships the **admin records** the op touched
-   (`AdminRecordKey.touchedBy`) to every peer in one `REPLICATE_ADMIN` and waits for a
-   majority of acknowledgements. `REINDEX` is the one exception: it touches no record, so the
-   coordinator broadcasts the request itself (`REINDEX_BROADCAST`) and every peer rebuilds its
-   own indexes from its own documents. With `"primaryKey": true` each node also rebuilds its own
-   `pk.idx` from its own page files; an entry the node could not version from its old `pk.idx`
-   gets version 0, so anti-entropy lets any other node's copy or tombstone outrank it.
-   Every record a peer receives is checked before it is observed or applied: its key must
-   round-trip and name a valid database, collection, user, procedure or schedule for its kind
-   (the database not one of the reserved `admin`, `admin_pages`, `cluster`), and its version, and
-   a collection's incarnation, must not be more than `clusterMaxClockSkewMs` ahead of the
-   receiving node's wall clock. A record that fails is skipped with a warning and does **not**
-   make the merge incomplete: it is permanently invalid, and retrying it would keep admin
-   anti-entropy and the quorum count busy forever.
-3. A node without a write quorum rejects an admin op up front (`503-2`) — the same
-   split-brain protection document writes get.
-4. A node that is not the coordinator refuses a coordinated admin op with `421-1` **before**
-   running it. The router forwards from the view it holds, so a peer whose view is stale can
-   forward to a node that no longer coordinates. The coordinator check runs ahead of the quorum
-   check, so a minority node that does not coordinate still says "retry elsewhere" rather than
-   `503-2`. If the role moves while the op runs, the op has already committed here, so the
-   client gets the outcome-unknown `503-3`, never a `421-1` that would claim it was not applied.
-5. A coordinator that has not completed an admin anti-entropy round with a majority since it
-   started or last became coordinator answers `503-5`: it may not hold every record the cluster
-   has, a create it committed could collide with one it has not seen yet, and a write it stamped
-   could land below a version it missed.
-
-**Admin records.** Every piece of admin state is a record with a key `kind|db|name` and an HLC
-version minted from the write clock (`HybridClock`), the same clock document writes use:
-
-| Kind | Key | Version stored in |
-|---|---|---|
-| database (owners) | `database\|db\|db` | the `admin/databases` row's `pk.idx` version column |
-| collection (index set, incarnation) | `collection\|db\|coll` | the `admin/collections` row |
-| user (hash, grants) | `user\|\|name` | the `admin/users` row |
-| schema | `schema\|db\|coll` | `writeVersion` in `{coll}-schema.json`, which wraps the schema as `{"writeVersion", "schema"}` |
-| triggers | `triggers\|db\|coll` | `writeVersion` in `{coll}-triggers.json` |
-| procedure, schedule | `procedure\|db\|name`, `schedule\|db\|name` | `writeVersion` in the definition file |
-
-A write stamps the record above the version it replaces (`AdminStamp.over`). A delete leaves a
-**permanent tombstone** in `cluster/admin-tombstones.idx`, minted from the clock; admin
-tombstones are never collected, because there are few of them and a collected one is exactly
-what would let a stale node resurrect a dropped database. The bootstrap admin is written at
-version `1`, so any real change outranks it. A standalone node writes no admin tombstones.
-
-**Applying a record** (`AdminRecordMerge`) is the same on a live `REPLICATE_ADMIN` and on an
-anti-entropy round, and it is decided per record:
-
-- **The higher version wins; at an equal version a tombstone beats a live record.** A record
-  that does not outrank the local one is skipped, which is what makes a re-sent or reordered
-  `REPLICATE_ADMIN` harmless: there is no lane and no ordering requirement on the wire.
-- **Every received version is observed by the clock** before it is applied, and the clock is
-  seeded at startup from every admin record and tombstone on disk, so a later local write or
-  delete is always stamped above anything this node holds.
-- **Parents first.** Records apply in kind order (databases, collections, users, then
-  definitions). A child whose parent is tombstoned at or above the child's version is dropped
-  as settled; a child whose parent this node does not hold yet leaves the round incomplete, and
-  the next round retries it.
-- **Case-folded names.** A record whose name collides with a registered sibling after ASCII case
-  folding (`Foo` against `foo`) is resolved by version: the newer one is installed and the other
-  gets a tombstone at the winner's version, on every node, so they converge on the same name.
-- **Local side effects run per changed record.** Installing a collection observes its
-  incarnation, quarantines a stale incarnation's folder, and builds or drops the indexes that
-  differ from the record's index set — each under its `.building` marker. Removing a user prunes
-  its database ownerships; removing a database or collection prunes the grants that named it.
-  Those local prunes keep each record's version. The coordinator's own `DROP_DATABASE`,
-  `DROP_COLLECTION` and `DELETE_USER` instead write the pruned user (or database) records at a new
-  version and replicate them with the drop, every user record for a drop and every database record
-  for a user removal. A node that missed both a drop and the re-create of the same name never
-  receives the tombstone, so only that newer version reaches it and removes the old grant.
-- **A changed password signs the user out on that node.** Installing a user record whose password
-  hash differs from the one this node held deauthenticates every socket connection of that user on
-  this node (their next request answers `401-1`), the same as `SET_PASSWORD` does on the node that
-  ran it. A record that only changes grants (same hash) signs nobody out, and a first install has
-  nobody to sign out. Forwarded and transaction-session clients are left alone, as for a deleted
-  user. One consequence is deliberate: a client that changed its **own** password through a node
-  other than the coordinator keeps its session when the op answers, then loses it on that node when
-  the replicated record lands, and must authenticate again with the new password. Telling it apart
-  would need the originating session carried in the admin record, a protocol change for a rare
-  operation, so the safe direction was chosen.
-- **A removal on a live `REPLICATE_ADMIN` runs the drop handler; a removal found by anti-entropy
-  quarantines instead** (renames the folder aside, logging `Quarantined collection`/`Quarantined
-  database`), because a stale node finding out late must never delete data it cannot prove was
-  dropped on purpose.
-
-A peer acknowledges `REPLICATE_ADMIN` only when every record applied; anything else answers an
-error (counted as a missing ack) and schedules an admin anti-entropy round, which retries it.
+Routing only looks at the request's main collection. An `AGGREGATE` on A that joins B goes to A's owner, which reads B
+from its own copy. So a collection that is joined a lot ends up cached on several nodes, and the joined side can be a
+moment behind B's owner while a write to B is still replicating.
 
 ## Transactions
 
-The node the client connects to (the **edge**) coordinates the transaction. Each write is
-routed to its collection's owner: buffered locally when the edge owns it, else forwarded in
-a `FORWARD_TX_REQUEST` (carrying a stable `txSessionId` and the distributed-transaction id
-`txId`), which makes that owner a **participant**. `START_TRANSACTION` and a read of a
-not-yet-written collection run locally; a read of a written collection is forwarded to its
-participant for read-your-writes.
+The node the client is connected to (the edge) coordinates the transaction. Each write goes to its collection's owner,
+which buffers it and becomes a participant. A participant holds the write locks of its collections until the commit,
+so other writers to those collections wait, the same as on a single server.
 
-Read-your-writes is decided over **every** collection a read touches — an `AGGREGATE`'s primary
-collection and each `JOIN` target — because a JOIN merges only the overlay held on the node that runs
-it. The edge records which node holds each written collection's buffered writes: when none of the
-touched collections was written the read routes as above, when one node holds them all the read runs
-there (reading the unwritten ones from its replica, as in [Joins across
-collections](#joins-across-collections)), and when the writes sit on two nodes the read answers
-`421-3 TRANSACTION_READ_SPANS_NODES` rather than join a partial view. The refusal leaves the
-transaction usable; commit or roll back as usual.
+Reads inside the transaction see its own writes. A read that touches collections written on two different nodes, such
+as an `AGGREGATE` with a `JOIN` between them, answers `421-3` instead of mixing a partial view. The transaction can
+still be used after that.
 
-Each participant runs its forwarded session on its **own single-thread executor** under a
-persistent synthetic client. This matters: the transaction holds the collection write lock
-from its first write until commit, and a `ReentrantReadWriteLock` write lock is
-thread-owned — running the whole session on one thread keeps acquire and release on the
-same thread and makes two concurrent sessions genuinely mutually exclusive rather than
-falsely sharing a reentrant lock. Because the lock lives on the owner, a concurrent
-non-transactional write routed there is properly serialized against the transaction.
+When only one owner is involved, the commit is simple: the owner applies the transaction and replicates it as one
+batch, which every replica applies at once, so no node ever shows half of it. Like a single write, it answers `503-3`
+when replication times out, and the commit stands.
 
-A session serves **one transaction at a time**, the one its messages name. The `txSessionId` is the
-edge connection's id, so it outlives a transaction, and the edge discards a transaction even when its
-ROLLBACK or `ABORT_TX` never reached the participant (an unreachable owner, a lost abort). A forwarded
-op naming another `txId` therefore first rolls back the transaction left on the session, since the
-edge only moves to a new id after it has discarded the old one, or answers
-`409-12 TRANSACTION_PREVIOUS_UNRESOLVED` while that one is fenced for recovery (prepared or
-half-applied). `PREPARE_TX` for another id votes no, and `COMMIT_TX`/`ABORT_TX` for another id
-resolve that id from its durable markers without touching the live session.
+When several owners are involved, the edge runs a two-phase commit:
 
-A participant can also lose a slice outright: it reaps the session of an edge it saw as departed,
-or it restarts. The edge never learns of either, so it marks every forward to a participant it has
-already forwarded to in this transaction as a **continuation** (`txContinuation`). A participant
-that receives a continuation with no active transaction answers
-`409-13 TRANSACTION_SLICE_LOST` without starting one, rather than opening a fresh slice under the
-same id that would let COMMIT report the surviving half as the whole transaction. `PREPARE_TX` then
-finds no session and votes no; the client can only roll back. A peer that omits the field is read
-as a first forward.
+1. It asks every participant to prepare. A participant votes yes only if it still has quorum, still owns its
+   collections, and has durably written its part and a prepared marker.
+2. If everyone voted yes, the edge durably writes the decision to commit and then tells every participant to commit.
+   Each one replicates its part as one batch.
+3. If any participant voted no or couldn't be reached, everyone aborts and the client gets `409-7`.
 
-**Single-owner fast path.** When only one owner is involved, commit skips 2PC: the sole
-owner replays its buffered ops, checks quorum (else `503-2`), and replicates them to a
-majority as **one atomic batch** (`REPLICATE_TX`, applied inside one multi-collection lock
-window so no other writer interleaves). A replication timeout returns `503-3` but the local
-commit stands. A `500-33` (half applied) or `409-10` (outcome unknown) from the owner leaves the
-transaction open on the edge, so re-sending COMMIT finishes the slice the owner is still holding; a ROLLBACK in
-that state is forwarded to the owner too and answers `500-33` rather than claiming a rollback. A script's
-`db.transaction` follows the same rule: when its commit or rollback comes back from the owner with one of those
-answers, the script seam keeps the edge transaction and its participant, rather than wiping them. A script running
-on a client connection therefore leaves that connection holding the transaction, and its next COMMIT reaches the
-owner. A re-sent COMMIT of a decided slice always finishes it, even when quorum or ownership was lost since the
-first attempt: the decision is binding, the apply is version-checked (see *Durable recovery log*), and only the
-replication waits, answering `503-3` until the replicas can be reached.
-A `409-10` can also mean the owner simply stopped waiting: the owner gives a forwarded op `replicationAckTimeoutMs`,
-and a commit that also waits that long for replica acks outlives it, finishing on the session's own thread
-afterwards. The edge's own wait also starts first, so it can give up on an answer the owner did send in time, and an
-answer can be lost in transit. The owner therefore records how each forwarded commit or rollback finished in a
-durable `{txId}|outcome` record, kept for `tombstoneRetentionMs` and surviving a restart, so a re-sent COMMIT answers
-the real outcome (`OK`, or `503-3` when replication timed out but the local commit stands) instead of `409-13`, and a
-ROLLBACK of a commit that landed answers `409-14 TRANSACTION_ALREADY_COMMITTED` rather than claiming a rollback. A
-re-send after that window answers `409-13`.
+The written decision is the commit point: if it exists the transaction commits, and if it doesn't the transaction is
+aborted. A prepared participant that restarts asks the coordinator what was decided. If the coordinator is gone it asks
+the other participants, and every participant keeps the outcome for `tombstoneRetentionMs` so it can still answer
+after it has forgotten the transaction. Recovery runs again on every membership change and on a periodic sweep. Every
+replayed write is applied only if nothing newer was written to that document in the meantime.
 
-**The participant's state.** Every message a participant receives for a transaction is decided from one state, read
-from its durable markers in a fixed order: `{txId}|outcome` is COMMITTED or ABORTED, `{txId}|localcommit` is
-COMMITTING (the commit is decided and being applied), `{txId}|part` is PREPARED, a live transaction with that id is
-ACTIVE, and nothing at all is NONE. One table (`ops/tx/SliceStateMachine`) maps state and message to an action:
+If no reachable node knows the outcome, the transaction stays in doubt, and a participant that never restarted keeps
+its locks. Nothing releases them on a timer, because a guess could commit on one node and abort on another.
+[`LIST_TRANSACTIONS`](protocol.md#list_transactions-admin-only) shows these transactions across the cluster with each
+node's status, and [`RESOLVE_TRANSACTION`](protocol.md#resolve_transaction-admin-only) forces a commit or an abort on
+every node once you know which one is right. They also show up in `GET_DATABASE_STATS`, in the
+`lwnrdb_in_doubt_transactions` metric and in periodic warnings.
 
-| State | first op | continued op | COMMIT | ROLLBACK | PREPARE_TX | COMMIT_TX | ABORT_TX |
-|---|---|---|---|---|---|---|---|
-| NONE | start and run | `409-13` | `409-13` | `409-13` | vote no | ack | ack |
-| ACTIVE | run | run | commit | roll back | prepare | `ERROR` | abort |
-| PREPARED | `500-33` | `500-33` | `500-33` | `500-33` | vote yes | finish | abort |
-| COMMITTING | `500-33` | `500-33` | finish | `500-33` | vote yes | finish | `ERROR` |
-| COMMITTED | `409-13` | `409-13` | recorded reply | `409-14` | vote yes | ack | `ERROR` |
-| ABORTED | `409-13` | `409-13` | `409-13` | recorded reply | vote no | `ERROR` | ack |
+The answers that are specific to a cluster:
 
-Every commit path — the local commit, the single-owner fast path, a 2PC participant on `COMMIT_TX`, the
-coordinator's own slice, a startup or recovery replay — runs the same procedure (`ops/tx/SliceCommit`): one begin
-record writes `|localcommit`, deletes `|part` and, for a slice whose ops are still only in memory, carries those ops
-too; then apply the ops, stage the triggers, and one finish record writes the outcome where a peer may ask for it and
-deletes `|part`, `|localcommit` and the ops together; then replicate. A failed apply leaves the slice COMMITTING with
-its locks held, and so does a finish record that did not land. Each record is one write-ahead-log append of
-`admin/transactions` (`AdminOperationHelper.writeTransactionRecords`), so no crash leaves half of it.
+- `409-10`: the outcome of the commit is unknown, because the owner stopped waiting or its answer got lost. Send
+  `COMMIT` again. The owner remembers how the commit ended and answers with the real outcome.
+- `500-33`: the commit was decided but isn't fully applied yet. The transaction stays open, so send `COMMIT` again.
+- `409-12`: the connection's previous transaction is still being recovered on a participant.
+- `409-13`: a participant lost its part of the transaction, because it restarted or thought the edge was gone. The
+  only way out is a rollback.
+- `409-14`: a `ROLLBACK` for a transaction that had already committed.
 
-Buffered ops stay in the edge's or participant's memory until the first durable marker: the begin record of a local
-commit, or the PREPARED record (`[+ops, +|part]`) of a 2PC participant. A transaction rolled back, refused or
-abandoned before then never touched the disk, and a crash before then leaves nothing to sweep. Ops above 4 MB go out
-as their own records first, the marker riding the last one; a crash between them leaves ops with no marker, which the
-startup orphan sweep removes.
+If the client disconnects or the edge crashes before the commit, the participants roll back. A part that was already
+prepared is left to recovery, so a decided commit is never lost to an early abort.
 
-**Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
-2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming
-it still owns every collection it buffered, and durably recording its ops and a PREPARED marker in one record), then — on a unanimous yes — the coordinator
-**durably records the commit decision** and drives `COMMIT_TX` to all. A coordinator with a slice of its own records
-the decision in that slice's begin record (`[+|coord, +|localcommit, −|part]`), forced before any `COMMIT_TX` is
-sent; it drives the participants only once the decision is published, so a record that did not land answers
-`500-24` with nothing decided. Any no vote or
-unreachable participant drives `ABORT_TX` to all and returns `409-7 TRANSACTION_ABORTED`.
-Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own replicas.
-If the coordinator's own slice fails to apply, the edge keeps the transaction open and answers `409-10`. The slice is
-already COMMITTING, so a re-sent COMMIT finishes it without re-checking quorum or ownership, because the decision was
-already made.
-
-**Durable recovery log.** The PREPARED markers and the coordinator's commit decision are
-records in `admin/transactions` (keyed `{dtxId}|part` / `{dtxId}|coord`, alongside the
-transaction's buffered slice). Presence of the coordinator marker is the commit point:
-present ⇒ commit, absent ⇒ **presumed abort**, and a coordinator that is reachable but has not
-decided yet leaves the slice in doubt rather than being read as an abort. "Not decided yet" means
-the transaction is still live on the coordinator: a coordinator prepares its own slice before any
-other, so after a restart it can hold a participant marker naming itself with no coordinator marker
-and no live transaction, and that state answers `NO_RECORD` to its own recovery and to every
-participant's `TX_STATUS`, so all of them abort. On restart a prepared
-participant asks the coordinator via `TX_STATUS` what to do, and a coordinator that recorded a
-commit re-drives `COMMIT_TX`. A participant that received `COMMIT_TX` writes `|localcommit` before applying, so a
-crash mid-apply is finished from that marker at startup, or by the recovery sweep, without asking anyone; `TX_STATUS`
-reports COMMITTING as committed. Writing `|localcommit` and deleting `|part` are one record, and finishing the slice
-deletes any `|part` still there too: before they were one record a crash between them left both, one left behind was
-listed in doubt forever, and once the outcome marker was garbage-collected recovery could read it as PREPARED and
-record a committed transaction as aborted. The coordinator step of the
-recovery sweep skips a decision a live commit is still driving, so it never sends a second `COMMIT_TX` whose
-acknowledgement could be taken for the commit's own.
-
-The participant does **not** hold its write locks while in doubt — clients may write those collections meanwhile —
-so every apply is version-checked. Each buffered op is given its write version when it is buffered, after its
-before-hooks, and the version is stored with the op. Applying an op compares it with what is stored: an equal
-version is the slice's own write landing again and is skipped, a higher stored version or a tombstone at or above
-the op is a later write and wins, and anything else applies. The same rule finishes an interrupted local commit, a
-2PC participant's replay and a re-sent commit, standalone or clustered, and it needs no knowledge of what applied
-before the crash: two ops on one id simply leave the later one standing. A delete's tombstone is reserved at the
-delete op's own version, and a delete that a later write superseded reserves none. A participant whose replay
-cannot finish applying its slice answers `ERROR` to `COMMIT_TX` rather than the ack, keeping its
-marker and locks, so the coordinator keeps its own marker and re-drives the commit until the slice
-lands — an acknowledged replay that had not finished let the coordinator forget the commit and the
-participant later abort a half-applied slice. Recovery re-runs on every
-membership change and on a periodic sweep, which also GCs old outcome markers and logs
-long in-doubt transactions. Every durable replay — startup, membership-triggered, the sweep, a peer's
-`COMMIT_TX`/`ABORT_TX` with no live session, `RESOLVE_TRANSACTION` — runs on one recovery thread,
-because a replay that cannot finish keeps its collection write locks and only the thread that holds
-them can retry.
-
-**Coordinator-loss mitigation.** A prepared participant that cannot reach its coordinator
-falls back to **cooperative termination**: it polls the *other* participants (whose
-addresses it recorded in its PREPARED marker) and adopts any definitive decision one of
-them reached. So that a peer can still answer after applying and forgetting the
-transaction, each participant retains a short-lived **outcome marker**
-(`{dtxId}|outcome`, GC'd after `tombstoneRetentionMs`). This resolves the common
-"coordinator died mid-fan-out" case. If *every* reachable participant is still uncertain,
-the transaction stays in-doubt holding its locks — the residual 2PC blocking case. An
-unsafe lock-releasing timeout is deliberately not used.
-
-**The operator surface for that case** is `LIST_TRANSACTIONS`, which fans out to every live
-member and aggregates in-doubt transactions by `dtxId` — each row carrying
-`{dtxId, coordinator, coordinatorReachable, participants, ageMs, perNodeStatus}` so the
-correct outcome can be decided before forcing it with `RESOLVE_TRANSACTION` (force-commit
-or force-abort, broadcast to all members). In-doubt transactions also surface per node in
-`GET_DATABASE_STATS` and in periodic warning logs.
-
-`RESOLVE_TRANSACTION` records the decision against the **live peer set**, and keeps the coordinator
-marker when any participant does not acknowledge it. Recording it with an empty participant list
-made the next recovery sweep treat the transaction as fully resolved and delete the marker, after
-which a participant that missed the forced COMMIT asked the coordinator, read `NO_RECORD`, and
-aborted a transaction the others had already committed — one distributed transaction resolved two
-ways, permanently and invisibly. This mirrors what the ordinary commit path already does: the
-marker is retained unless every listed participant acked.
-
-**Liveness before prepare.** If the edge connection closes or the edge node crashes before
-commit, the not-yet-prepared session is rolled back — the edge aborts its participants, and
-a membership listener reaps sessions of a departed edge node. A session that has already
-voted yes is left for recovery and never reaped, so a coordinator commit is never lost to a
-premature abort.
-
-## Failure and partition behaviour
-
-Because data is fully replicated, losing a node never loses data — every survivor has a
-complete copy. When an owner dies the ring is recomputed and its collections are reassigned
-to survivors (no data movement; caches warm lazily). During a partition only the majority
-side accepts writes for its owned collections; the minority side is read-only until the
-partition heals. Reassignment is automatic — the ring is a pure function of the ALIVE
-membership — and anti-entropy makes both the handoff and the rejoining of a previously-down
-node data-safe.
-
-**Shutdown and departure.** `ShutdownCoordinator` leaves the cluster last, after the queues
-have drained, so peers keep routing here only while this node can still answer. From its first step,
-though, it refuses every write a peer sends — a forwarded request answers `503-13`, which the edge
-relays to its client, and a `REPLICATE`, `REPLICATE_TX`, `PREPARE_TX` or `COMMIT_TX` answers an
-`ERROR` the sender treats like a peer that has already left — because the background queue is about
-to stop accepting index events. Gossip, `DIGEST`, `PULL`, `TX_STATUS`, `ABORT_TX` and a forwarded
-rollback are still answered. There is,
-however, **no graceful LEAVE message**: a departing node is detected the same way a crashed
-one is, by missed heartbeats, so peers wait out `deadTimeoutMs` (15s by default) before
-reassigning its collections. During that window writes to those collections fail with
-`503-4 OWNER_UNREACHABLE` (reads fall back locally when `readFallbackToLocal` is on).
-Adding a LEAVE message so membership reassigns immediately is a worthwhile follow-up; until
-then, drain the node's traffic at the load balancer first if that window matters.
-
-**Testing failures between two statements.** Killing a process can only land *somewhere* in a
-critical section. To stop a node at one exact statement, the engine has a test-only fault seam:
-named points (`WRITE_OWNERSHIP_RECHECKED`, `DELETE_TOMBSTONE_RESERVED`, `ANTI_ENTROPY_SNAPSHOTTED`,
-`PK_INDEX_REPLACED`, `INDEX_BATCH_FLUSHED`, `WAL_APPENDED`, `WAL_CHECKPOINT_FORCED`, `PEER_REPLY`, among others) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
-inert unless `faultInjectionEnabled=true`, which no production node should set; the integration
-suite turns it on for its throwaway nodes. See the
-[README](../README.md#fault-injection-testing-and-debugging-only) for the operations.
+A script's `db.transaction` across owners goes through the same two-phase commit.
 
 ## Anti-entropy and versioning
 
-Every document write is stamped with a **version** — a hybrid logical clock value
-(`cluster/HybridClock`) assigned by the coordinating owner and persisted as an extra trailing column of the
-PK index (`id<US>position<US>length<US>page<US>version`, where `<US>` is U+001F, the delimiter every
-`.idx` file uses). It ships in the `REPLICATE` payload so
-replicas store the *owner's* version rather than assigning their own, and a node advances
-its clock past any version it receives so it never later assigns a lower one.
+Every write gets a version from a hybrid logical clock (wall-clock milliseconds plus a counter), assigned by the owner
+and stored with the document on every node. Each node moves its clock past any version it receives, so a later write
+always gets a higher version, across restarts too. A replica ignores anything older than what it has, which makes
+repeated and reordered messages harmless.
 
-**Versions travel as text, never as JSON numbers.** A packed version is around 2^57, well past
-the 2^53 a double represents exactly, so a numeric field lost the low bits of the logical counter
-on every hop: distinct writes arrived as equal versions (which last-write-wins cannot repair), a
-replica's stored version never matched the owner's so the digest-summary fast path could never
-hit, and a rounded-up version could outrank a newer write. The `version` field of `DigestEntry`
-and the `versions` lists of `ReplicationPayload` and `AntiEntropyPayload` are therefore strings
-on the wire. This is a cluster protocol change: nodes on either side of it do not interoperate,
-which the single-build rule above already requires. Document numbers are untouched — they are
-still stored and treated as `double`.
+A delete leaves a tombstone with its version. Without it, a node that missed the delete would bring the document back.
 
-**A collection's incarnation travels the same way.** The incarnation minted at `CREATE_COLLECTION`
-comes from the same clock and is the same 2^57 magnitude, so it rides inside the collection's admin
-record as text; as a JSON number its 16-bit logical counter was quantised away, every peer held a
-neighbouring value, and the healthy collection was quarantined as a stale incarnation. Only the
-coordinator mints one: a client cannot supply it, a duplicate create keeps the existing one, and a
-peer installs the value the record carries. Every incarnation a node accepts — an installed
-collection record, the registered entries at startup — is `observe`d by the write clock, so a
-coordinator that takes over later mints above it even if its wall clock lags the node that minted
-the original.
+Anti-entropy is how nodes that missed something catch up. On every membership change, and every
+`antiEntropyIntervalMs` (60 seconds), each node compares its collections with its peers. The comparison starts with one
+hash per collection, so collections that already agree cost almost nothing, then narrows down to buckets of ids, and
+only the documents that differ are pulled. For each id the highest version anywhere wins, and a tombstone wins a tie
+with a live document. Two live copies with the same version are ordered by node id, so every node picks the same one.
 
-Tombstones are only garbage-collected on a round in which **every** currently known peer answered
-the digest request. A node that is partitioned — or alone — keeps them: collecting a tombstone
-while a peer still holds the document live is what lets the next rejoin resurrect a committed
-delete.
+This is what repairs a replica after a replication timeout and brings a node that was down up to date. Each collection
+also has an incarnation, so if a collection is dropped and created again under the same name, documents from the old
+one are never pulled into the new one.
 
-A reachable, correctly-answering node can reach the same state without any partition. `reserveDelete`
-appends the tombstone **before** the document is removed — deliberately, so a crash between the two
-leaves the delete recorded rather than lost — and nothing removes it if `executeDelete` then throws.
-The node is left holding a live document and a newer tombstone for the same id. That self-heals on the
-next sweep, because `reconcile` folds this node's own tombstones into its winner map before contacting
-any peer and its delete branch fires on `localLive.containsKey(id)` regardless of where the winner came
-from: the node applies its own orphaned tombstone. Until that sweep runs the node still serves a
-document its peers have already dropped, the client was told the delete failed, and the eventual delete
-goes through the replicated-apply path so the `DELETED` trigger never fires. If the local delete fails
-*persistently* — a damaged page file, say — the self-heal fails every round too, and once the tombstone
-ages past `tombstoneRetentionMs` it is collected while the document is still on disk, which is the
-resurrection case above reached without a partition.
+Tombstones are kept for `tombstoneRetentionMs` (24 hours), and only collected in a round where every known node
+answered. Set it well above the longest time you expect a node to be down: a node that comes back after its peers
+collected a tombstone brings the deleted document back.
 
-A **delete**
-records a versioned **tombstone** (`{coll}-tombstones.idx`), needed because a plain delete
-cannot converge — a lagging replica still holding the document would resurrect it.
+## Admin and DDL replication
 
-On any membership change, `cluster/AntiEntropyService` reconciles each of this node's
-collections against the live members:
+Databases, collections, indexes, schemas, users, permissions, procedures, triggers and schedules belong to the whole
+cluster, not to a collection owner. One node, the admin coordinator, serializes every change to them, and the other
+nodes forward those requests to it. The coordinator applies the change, sends the changed records to every node and
+waits for a majority, so a node without quorum refuses admin changes with `503-2`, like writes.
 
-1. It describes its collection (live documents with their version and byte length, plus tombstones)
-   in one pass under the collection read lock, without sorting or building strings: each entry
-   hashes to a 64-bit `DigestHash.entryHash` (FNV-1a of the id, mixed with the version, the length
-   and the deleted flag), and the **summary** is the entry count plus the wrapping sum of those
-   hashes, so it is independent of order. A tombstone older than the live row of the same id is
-   left out on both sides, so a superseded delete cannot keep two converged nodes apart. Entries
-   also fall into `B` **buckets** by the top bits of the id hash alone (`B` a power of two between
-   16 and 4096, about 64 entries per bucket, chosen by the requester). The first `DIGEST` carries
-   the summary and `B`: a peer whose own summary matches answers `summaryMatch`; a peer holding at
-   most `2B` entries answers them all; any other answers its `B` bucket summaries. The requester
-   then asks only for the entries of the buckets that differ, so one changed document among a
-   million ships one bucket, and a converged round builds no per-entry map at all. The answering
-   node's id travels once per payload. Both sides must hash identically, byte length included, or
-   the summaries never agree and every sweep ships every bucket.
-2. It computes, per id, the **highest version seen anywhere** — a tombstone wins a tie with
-   a live document, so a delete beats a concurrent write at the same version. Two live copies at
-   exactly equal versions are ordered by node id, and the pull gate and the replicated-apply check
-   use that same total order so the two paths cannot disagree. One caveat: the id compared is the
-   one stamped by the node **answering** the digest, not the node that wrote the version, so the
-   tie-break is not yet a stable property of the write. Persisting the writer's id beside the
-   version would make it one, and is a disk-format change that has not been made.
-3. Where a peer holds the winning live version it pulls that document and applies it as a
-   versioned upsert; where a tombstone wins it deletes locally and records the tombstone. It
-   never overwrites an id it already holds at the winning version: a copy that wins only on the
-   node-id tie-break is pulled only when its byte length differs from the local one (or the peer
-   sent no length), since two copies at one version and one length already produce the same
-   summary. Pulls go out in batches of 500 ids, each applied as it returns, so one large repair
-   cannot outlast `replicationAckTimeoutMs` and a failed batch skips only itself.
+Every admin record has a version from the same clock as documents. The newer version wins, a delete leaves a permanent
+tombstone, and there is an admin anti-entropy next to the document one, so a node that was down while a database was
+created or a user changed catches up when it comes back. A node that finds out late that a database or collection was
+dropped doesn't delete it: it renames the folder aside (`<name>.quarantined-...`) and logs it. Check those folders and
+delete them yourself.
 
-**Every digest and pull carries the collection's incarnation, and a mismatch stops the exchange.**
-Without it the whole mechanism above runs happily over documents belonging to a *dropped* creation
-of the collection name. A node that missed a `DROP_COLLECTION` or `DROP_DATABASE` keeps its admin
-entry and its documents; a peer asks it for a digest, sees ids the live incarnation has never held,
-and pulls them in. The version check cannot catch this — it compares versions *per id*, and these
-are ids nothing on the live side can be compared against. The owner then holds them, replicates
-them everywhere and serves them to clients, permanently.
+A coordinator that has just started, or just taken the role over, answers `503-5` until it has merged the admin records
+of a majority, so it can't create something that collides with a change it hasn't seen yet. Clients retry it.
 
-Admin anti-entropy's quarantine does not prevent it: that is what the stale node does to its own
-copy, and it runs after the node has already answered. `AntiEntropyPayload` therefore carries
-the requester's incarnation on both `DIGEST` and `PULL`; a node whose own incarnation for that name
-differs answers `staleIncarnation` with no digest and no documents, and `reconcile` skips any peer
-that reports `staleIncarnation` or whose answer carries a different incarnation — leaving
-`everyPeerAnswered` false, so tombstone collection still waits. Like the versions above, the
-incarnation travels as **text**; `0` on either side means "unknown" and the exchange proceeds as
-before, so a collection created before the field existed is never affected.
+`REINDEX` is the exception: every node rebuilds its own indexes from its own documents.
 
-**The apply checks it again, because the exchange is not atomic.** A gate on the request and the
-answer alone still let a pull answered by a peer that had not yet processed a drop land after this
-node finished `DROP_COLLECTION` and `CREATE_COLLECTION` during the round trip — the fresh collection
-holds no version and no tombstone to compare against, so every dead document was accepted. An
-owner's `REPLICATE` held on a replica's ordered peer lane across the replica's own drop and create
-had the same effect. Every replicated document payload — owner push, transaction batch, and the
-deletes and pulls anti-entropy applies — therefore carries the collection incarnation as text, and
-`ReplicatedApplyHelper` refuses it under the collection write lock when it names another incarnation
-or a collection that is not registered. A refused `REPLICATE` answers `ERROR`, so the owner counts no
-ack; a refused transaction batch applies none of its entries. `0` still means unknown and applies.
+A user or permission created a moment ago can answer `403-1` or `401-2` once on a node that hasn't applied it yet, and
+a retry is enough. A password change signs that user out on each node as the change reaches it.
 
-A node also refuses `DIGEST` and `PULL` with an `ERROR` until its first admin reconciliation has
-completed, because `Main` starts the cluster server and joins the membership before admin
-anti-entropy runs, and a peer sweeps the moment the node appears. `ADMIN_SNAPSHOT` is deliberately
-not gated — it is what lets the node merge its peers' admin records and so open the gate. This narrows the window rather
-than closing it: `adminSyncCompleted` is cleared only on `stop()`, so a node that stayed up through
-a partition reports itself synced the whole time. The incarnation check is what covers that case.
+## Scripts
 
-Because every node runs the same pull-newest reconciliation and the version totally orders
-writes per id, the cluster converges to the latest write regardless of which node became a
-collection's owner after a failure. No committed write is lost when ownership hands off, and
-a node that was down catches up when it rejoins.
+`RUN_SCRIPT` and `CALL_PROCEDURE` can touch any collection of a database, so there is no owner to send them to.
+Instead they are placed by load. The node that gets the request samples two nodes (itself included), picks the one with
+less script load relative to its `maxConcurrentScripts`, with a preference for the node that owns more of the
+database's collections, forwards the run there and relays the answer. Taking the better of two random nodes instead of
+the least loaded one keeps every node from sending its scripts to the same place at once. `scriptLocalityWeight` (0 to
+100, default 50) sets how much ownership counts, and `0` means load only. Set `scriptRoutingEnabled=false` to run
+scripts where they arrive.
 
-Beyond the membership-triggered pass, a **periodic sweep** runs the same reconciliation
-every `antiEntropyIntervalMs` (default 60s), so a replica left behind by a replication
-timeout is repaired without waiting for a membership change. At the end of each
-collection's reconciliation the tombstone file is **garbage-collected** when something is due —
-its oldest tombstone is past `tombstoneRetentionMs` (default 24h) or it holds more than twice as
-many lines as ids — and left alone otherwise, so a converged round rewrites nothing: duplicates
-collapse to the highest version per id and expired tombstones are dropped. Each collection's
-tombstones are held in memory once read (`fs/TombstoneStore`), revalidated by the file's size and
-modification time on every access. Retention must comfortably exceed the longest expected node downtime,
-otherwise a delete could be collected before a still-down replica has converged on it and
-would be resurrected on rejoin. Owner cache warm-up on handoff is deliberately lazy.
+A node still catching up on admin metadata is never picked, since it might not have the database or the procedure yet.
 
-### Admin and DDL anti-entropy
+A script runs at most once. If the chosen node can't be connected to, the script runs locally instead. Any other
+failure, like a timeout or a dropped connection, answers `503-7`, because the script may still be running over there
+and running it again could apply its writes twice. Retrying is up to you, since only you know if the script can be
+repeated safely. A `503-6` from the chosen node (it is at its script limit) is passed through as it is.
 
-Document anti-entropy converges the *contents* of collections but not their *structure*: a
-node that was down during a `CREATE`/`DROP DATABASE`/`COLLECTION`/`INDEX`, `SET_DATABASE_OWNERS`,
-a definition change or a user op would otherwise never learn of it. Because every admin record
-carries its own version (see *Admin and DDL replication*), admin anti-entropy is the same
-per-record merge the live path runs, applied to everything a peer holds.
+The script runs as the user who sent it, and the node that runs it checks that user's permissions again.
 
-On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService` asks
-each live peer for its `ADMIN_SNAPSHOT` — every live admin record and every admin tombstone it
-holds — and merges it with `live=false`. A record that outranks the local one is installed, a
-tombstone that outranks it removes the local record by **quarantine** (the folder is renamed
-aside as `<coll>.quarantined-<incarnation>-<ts>` or `<db>.quarantined-<ts>`, never deleted), and
-everything else is left alone. Merging is idempotent and order-free, so two nodes holding
-different halves of the history each take the other's newer records and converge, and nothing a
-node acknowledged can be erased by a peer that lacks it: an absent record is not a deletion, only
-a tombstone is. A create never adopts an unregistered folder that still holds data — it moves
-that aside first, so a re-created name always starts empty. When the merge changed anything, a
-document reconciliation pass follows so freshly installed collections repopulate.
+Placement spreads the interpreter's CPU, it doesn't bring the script to its data. Each operation the script runs is
+routed to its collection's owner like any other request. Scripts inside a pipeline (`SCRIPT` operators and `REDUCE`)
+are different: they run on the collection's owner together with the `AGGREGATE`.
 
-Peer-supplied names and versions are validated here exactly as on the live path: a snapshot
-record with an invalid key or a version more than `clusterMaxClockSkewMs` ahead is skipped, and
-does not keep the node syncing.
+`LIST_SCRIPTS` and `CANCEL_SCRIPT` cover every live node. A run on a node that can't be reached is missing from the
+list until that node is back. `GET_DATABASE_STATS` shows each node's placement counters under `scripts`.
 
-A definition a node could not read (a torn schema, triggers file, procedure or schedule) is left
-out of its snapshot. That is safe now that only a tombstone deletes: its peers keep their valid
-copies, and the node itself treats the torn file as absent, so the first peer copy it merges
-replaces it. A record the merge could not apply this round — a parent this node does not hold yet, a
-lock or barrier that stayed held for `replicationAckTimeoutMs` — leaves the round incomplete and
-is retried by the next one. An install and an anti-entropy drop take the same name locks as the
-client DDL, in the same order (`db|.collection-names` after the collection lock,
-`admin|.database-names` inside the database barrier), and check again for a case-variant sibling
-under them, so a record install can never register a name that folds onto a folder a concurrent
-client create just claimed. A sibling that appeared in between leaves the round incomplete, and the
-next one settles the pair by version.
+## Stored procedures and triggers
 
-A coordinator answers `503-5 ADMIN_SYNCING`, and gossips `adminSyncing`, until one admin
-anti-entropy round has merged **in full** from enough peers that they and the node itself form a
-majority (a single-node cluster is synced with no peers). The gate is armed at start and again
-every time a node *becomes* coordinator. It closes two windows. A restarted node that becomes
-coordinator before it has seen what changed while it was down would commit a create that collides
-with a record it has not merged yet. And a node that missed one admin op — its `REPLICATE_ADMIN` was
-lost — and then takes over would stamp its next write to that record from its own clock, which,
-under clock skew, could fall below the version it missed, so the acknowledged newer write would
-lose the merge everywhere. That op was acknowledged by a majority, so any majority merge holds it,
-and merging observes its version into the clock before the next stamp. A round that started before
-the handover does not count, because its snapshots may predate the old coordinator's last commit.
-Each refused op schedules a round, so the new coordinator does not wait out the sweep interval.
-For that one round, `DIGEST`/`PULL` against the new coordinator answer an error and script
-placement skips it.
+Saving or deleting a procedure or a trigger is an admin change, so every node ends up with exactly the same definition,
+version and definer included. `CALL_PROCEDURE` is placed like `RUN_SCRIPT`.
 
-A populated node switched from standalone to clustered needs no special case either. Its records
-already carry versions above the bootstrap admin's `1` and above zero, and a fresh peer's merge
-installs them, so whichever of the two coordinates, the populated node's databases and users
-survive. Admin records written by a build from before versioning carry no version, so the first
-start of a newer build stamps each of them once (`AdminRecords.stampUnversioned`) before writing anything
-else; without that, a fresh peer's bootstrap admin at `1` would outrank the upgraded node's own
-admin and reset its password. Two populated standalone nodes merged into one cluster keep the newer of each colliding
-record — merging two populated nodes is still not a supported migration.
+A trigger fires only on its collection's owner, never on the replicas, and before-write hooks run there too. The
+trigger depth limit holds across nodes.
+
+## Scheduled procedures
+
+Each schedule is placed on the ring like a collection, so one node fires it and another one takes over when that node
+dies. A node also needs quorum to fire a schedule, so the minority side of a partition fires nothing.
+
+When a schedule changes owner, the new owner starts from the next future occurrence, so a tick that may have run
+already isn't run again. The cost is that a membership change during a tick can drop that tick, and runs missed while a
+node was down are skipped, not caught up. Also, right after a node joins or leaves, two nodes can briefly both think
+they own a schedule and fire the same occurrence twice. A job that must not run twice has to be idempotent.
+
+## Pending trigger runs are node-local
+
+The records of trigger runs waiting to run (`admin/trigger_runs`) are not replicated. A node that restarts replays its
+own, but a node that never comes back takes its pending runs with it: they are lost, never run twice. Replicating them
+would add a network round trip to every write that fires a trigger.
 
 ## Listenable queries in a cluster
 
-`LISTEN` and `STOP_LISTEN` are **not** owner-routed: they are served by whichever node the client is
-connected to, and the registration lives on that node. Replication is full rather than partial, so
-notifications are delivered everywhere — what is weaker is their *consistency*. An `AGGREGATE` is
-forwarded to the collection's owner and sees authoritative state, while a `LISTEN` on the same
-connection reads this node's replica, and a commit the owner acknowledged is only quorum-replicated.
-A client that runs `AGGREGATE` and then `LISTEN` can therefore watch the result set go **backwards**.
+`LISTEN` is served by the node the client is connected to and re-runs against that node's copy. It sees every write,
+since every node has all the data, but its copy can be a moment behind the owner. A client that runs an `AGGREGATE`
+(answered by the owner) and then a `LISTEN` can see the result go back for a moment. A listener never sees half a
+transaction.
 
-Re-runs are deliberately dirty reads (timeliness over strict consistency), but a transactional commit
-defers its notifications until every buffered op has applied, and a re-run that overlaps a commit's
-apply (one queued before the commit started) is held back and re-queued by the commit's flush, so a
-listener never sees a frame holding half a transaction.
+## Failure and partition behaviour
 
-Dirty does not mean unsynchronised. A writer reshapes the cached PK index in place — a bulk save
-removes, appends twice, and only re-sorts in a `finally` — so a reader binary-searching that list
-without the collection lock could miss rows, throw, or report a phantom torn index. A caller holding
-no collection lock is therefore handed its own snapshot of the list rather than the shared instance,
-taken under a non-blocking `tryLock`; when a writer holds the lock the reader falls back to reading
-the PK index from disk, which the per-file locks already make safe for a dirty read. The re-run
-itself still takes no collection lock and never makes a writer wait.
+When a node dies, the others mark it dead after `deadTimeoutMs` and hand its collections, its schedules and maybe the
+admin coordinator role to the survivors. No data moves, every survivor already has it. Until then, writes to its
+collections answer `503-4` and reads come from the local copy.
 
-## Wire protocol
+During a partition only the side with a majority accepts writes, for documents and admin changes alike. The minority
+side still answers reads from its own copy, which stops getting updates. When the partition heals, anti-entropy brings
+both sides back together.
 
-The node-to-node channel reuses the client transport: line-delimited EJson over TCP on
-`clusterPort`, optionally wrapped in TLS (`clusterTlsEnabled`, reusing the PKCS12 keystore
-— all nodes must share the same keystore). Every frame is a `ClusterMessage` envelope
-whose `correlationId` lets one pooled connection multiplex many in-flight requests, and
-inbound messages whose `secret` does not match `clusterSecret` are rejected.
+A node that shuts down first stops accepting writes from its peers (forwarded requests answer `503-13`), and leaves the
+cluster last, once it has drained. There is no leave message, so the others notice it the same way as a crash, after
+`deadTimeoutMs`.
 
-**The channel authenticates before it parses.** Every outbound connection opens with one `HELLO`
-frame carrying the secret, sent without waiting for an answer. The listener reads that first line
-under a 4 KB cap and within `clusterHandshakeTimeoutMs`; a connection that stays silent, sends a
-longer line, sends anything other than a `HELLO`, or presents the wrong secret is closed without
-a reply. That read deadline is backed by an absolute one: a timer closes any connection still in
-its handshake at `clusterHandshakeTimeoutMs` plus one second, because a TLS handshake runs inside
-the first read and a peer dripping it one record at a time would otherwise reset the read timeout
-forever. Handshake failures are logged through the same rate limiter as the client port's
-pre-authentication warnings. At most 64 connections may be in that pre-authentication state at once, and at most 8 of
-them from one remote address; the next one is closed on accept. The per-address share keeps one
-flooding host from holding every slot while a restarted peer tries to rejoin. The `HELLO` line is
-parsed with the same 128-level nesting limit as a client request. Only after the handshake does the frame loop start, and every later line, in
-either direction, is capped at `clusterMaxFrameSize` (a larger frame closes the connection; the
-peer reconnects). The per-frame `secret` is still checked on every message. The secret must be at
-least 32 characters and is compared in constant time (`MessageDigest.isEqual`).
+## What the cluster guarantees
 
-**Mutual TLS.** With `clusterTlsEnabled=true` the cluster listener requires a client certificate
-(`needClientAuth`) and trusts exactly what the shared keystore trusts, which is also the key every
-node presents. A process without a certificate from that keystore (or its CA) fails the TLS
-handshake and is logged as `Rejected cluster connection: TLS handshake failed`. Outbound peer
-sockets pin the same protocols as the listeners (`TLSv1.3`, `TLSv1.2`). Hostname
-verification stays off, since nodes connect by advertised address; the guarantee is "holds a
-certificate the shared keystore trusts". With `clusterTlsEnabled=false` on a clustered node,
-startup logs a `SECURITY WARNING`.
+What it promises:
 
-**Peer input is validated at every entry point, never trusted because the sender holds the
-secret.** `REPLICATE`, `REPLICATE_TX`, `DIGEST` and `PULL` must name a valid, non-reserved
-database and collection, and replicated document ids and delete ids must be valid ids; a payload
-that fails answers `ERROR` with `Rejected replicated payload: invalid collection or document id`.
-`REINDEX_BROADCAST` is re-validated. A forwarded request (`FORWARD_REQUEST`,
-`FORWARD_TX_REQUEST`) is re-validated and re-authorized for its `actingUser` on the target
-(`400-1`, `401-1` without a user, `401-2` for a user the target does not hold, `403-1`); a
-transaction rollback is always let through, so is a commit for a session that already holds a
-transaction (the user was checked when its ops were buffered, and refusing a re-sent COMMIT of a
-fenced slice would strand it), and script-run history writes on `script_runs` are exempt from the
-user check. A replicated admin record more than `clusterMaxClockSkewMs` ahead is deferred: it is
-not applied and `REPLICATE_ADMIN` answers `ERROR`, so the coordinator retries it once the clocks
-agree. A replicated version, delete version or collection incarnation more
-than `clusterMaxClockSkewMs` ahead of the receiving node's wall clock is refused and not observed
-into its write clock, so a forged near-`Long.MAX_VALUE` version cannot overflow it; the refusal is
-an `ERROR`, so the sender reports the replica as failed and a node whose clock is that far off is
-loud. Underneath all of this, the storage layer itself refuses an empty, `.`, `..` or
-separator-bearing name as a path segment. All of these protect against a stale or buggy peer and
-contain a secret holder; they do not make `actingUser` trustworthy, because whoever holds the
-secret chooses it.
+- A write answered `OK` is on its owner and on a majority of the nodes, so it survives losing any minority of them.
+- Writes to one collection are ordered by its owner, and the minority side of a partition accepts none.
+- All nodes end up with the same data. For each document the write with the highest version wins everywhere, and a
+  delete wins a tie.
+- No node ever shows half a transaction, and a transaction across owners commits everywhere or nowhere.
+- A trigger fires once, on the owner. A script runs at most once.
+- Schemas, users, permissions and definitions end up the same on every node, and a node that is behind never deletes
+  data because of it.
 
-Every peer shares **one** connection, so what a node does with an inbound frame decides what the
-rest of that peer's traffic waits for. `ClusterConnectionHandler` answers a `REPLICATE`, and a `REPLICATE_TX`
-whose entries all name one collection, on that collection's own ordered lane (`ApplyLanes`, keyed `db|coll`): writes
-to one collection apply in the order the peer sent them, while a write parked on one collection's lock no longer holds
-up a peer's writes to every other collection. A lane exists only while it has work and runs on a virtual thread.
-Admin, 2PC and forwarded-transaction messages, a `REPLICATE_TX` spanning several collections and a payload naming an
-invalid collection stay on one ordered control lane. Lanes can reorder across collections, which is safe because every
-apply is version-checked and incarnation-guarded; a coordinator owning a new collection may see its `REPLICATE`
-overtake the `REPLICATE_ADMIN` that created the collection on a replica, which then answers `ERROR` once (the write is
-unregistered there) and anti-entropy repairs it. `GOSSIP`, `FORWARD_REQUEST`, `DIGEST` and `PULL` are answered
-concurrently beside the lanes. The last two are there because they wait out a whole `replicationAckTimeoutMs` on a busy collection
-lock: on the ordered lane that wait was the peer's entire inbound channel, so an ordinary long write
-holding a collection lock made the *requester's* next forwarded transaction op time out and the
-client's write be refused. They mutate nothing, and anti-entropy's two sides already snapshot at
-different instants, so nothing depends on where they sit in the stream. Replies may come back out of
-order; the peer dispatches them on `correlationId`.
+What it doesn't promise:
 
-The client-port connection limits (`maxRequestSize` and the 64Kb pre-authentication line cap,
-`authTimeoutMs`, `transactionIdleTimeoutMs`, `maxConnections`) apply only to client sockets. They do not
-apply to peer connections on `clusterPort`, nor to forwarded requests and `txSessionId` sessions, which
-have no client socket on the participant: a participant's session is reaped by the existing `deadTimeoutMs`
-mechanism, and the edge's own idle-transaction rollback reaches it through the ordinary 2PC abort. The
-cluster listener has its own caps, described above.
+- It is not linearizable. Ownership comes from each node's own view of the membership, so right after a node joins or
+  leaves two nodes can briefly both think they own a collection. Writes accepted on both sides are settled by
+  last-write-wins, so one of them is overwritten without anyone being told. Preventing that would need a consensus
+  protocol, which LWNRDB doesn't have.
+- `503-3`, `503-8` and `503-7` mean the outcome is unknown. The write may well be applied, and then it will spread.
+- A transaction whose collections changed owner right before it replicated answers `OK` without having reached a
+  majority. It isn't lost, since it has the newest version and anti-entropy spreads it, but the answer promises more
+  than happened.
+- Some reads can be a little behind: a read served locally because the owner was unreachable, the joined side of a
+  `JOIN`, and every `LISTEN`.
+- A user or permission change may need one retry on a node that hasn't applied it yet.
+- A schedule can fire twice or skip a tick around a membership change, and runs missed while a node was down are
+  skipped.
+- The pending trigger runs of a node that never comes back are lost.
+- A transaction across owners can be left in doubt when its coordinator and every participant are unsure. You resolve
+  it by hand.
+- A node that was down for longer than `tombstoneRetentionMs` brings deleted documents back when it returns.
+- There are no mixed-version clusters, so no rolling upgrades.
 
-| Message (+ ack) | Carries | Purpose |
-|---|---|---|
-| `HELLO` (no ack) | `secret`, `sender` | the mandatory first frame of every connection |
-| `JOIN_REQUEST` / `JOIN_RESPONSE` | `sender`, `members` | discovery |
-| `GOSSIP` / `GOSSIP_ACK` | `sender`, `members` (+ heartbeat and telemetry) | membership, failure detection, script load |
-| `REPLICATE` | `replication`: `{dbName, collName, op: UPSERT\|DELETE, documents, ids, versions}` | document write replication |
-| `FORWARD_REQUEST` / `FORWARD_RESPONSE` | `forwardBody` (raw JSON text), `actingUser` | request routing and script placement |
-| `REPLICATE_ADMIN` | `adminSnapshot`: the `{key, version, body}` admin records an op touched (`body` absent for a tombstone) | admin/DDL replication by record-shipping |
-| `REINDEX_BROADCAST` | `forwardBody` (the `REINDEX` request, `primaryKey` included) | a cluster-wide index rebuild |
-| `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted, length}` digest and its summary, or pulled documents | document anti-entropy |
-| `ADMIN_SNAPSHOT` | `adminSnapshot`: every admin record and admin tombstone the node holds | admin/DDL anti-entropy |
-| `FORWARD_TX_REQUEST` | `forwardBody`, `txSessionId`, `txId` (reply reuses `FORWARD_RESPONSE`) | a forwarded transaction operation |
-| `REPLICATE_TX` | `txReplication`: per-collection entries | a committed transaction's atomic batch |
-| `PREPARE_TX` / `COMMIT_TX` / `ABORT_TX` | `txId`, `txParticipants` | 2PC control |
-| `TX_STATUS` | `txStatus`: `COMMITTED`/`ABORTED`/`PREPARED`/`UNKNOWN` | recovery and cooperative termination |
-| `LIST_TX` | `inDoubtTransactions` | cluster-wide `LIST_TRANSACTIONS` |
+## Security
 
-## Configuration reference
+Nodes talk to each other over `clusterPort` with the same line-delimited JSON the clients use. The first thing each
+connection sends is the shared secret, and a connection that doesn't, sends the wrong one, or takes longer than
+`clusterHandshakeTimeoutMs` is closed without an answer. After that every message still carries the secret, and
+messages are capped at `clusterMaxFrameSize`. The client limits (`maxRequestSize`, `maxConnections` and the
+authentication and idle timeouts) don't apply to the cluster port.
 
-See the *Clustering* row of the configuration table in the main
-[README](../README.md#configuration). Key settings: `clusterEnabled`, `clusterPort`,
-`clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`, `nodeId`,
-`clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`, `deadTimeoutMs`,
-`deadProbeIntervalMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`, `readFallbackToLocal`,
-`scriptRoutingEnabled`, `scriptLocalityWeight`, `clusterTlsEnabled`, `clusterSecret` (at least 32
-characters when clustering is on), `clusterMaxFrameSize` (at least twice `maxRequestSize`),
-`clusterHandshakeTimeoutMs`, `clusterMaxClockSkewMs`, `antiEntropyIntervalMs`,
-`tombstoneRetentionMs`.
+Everything a peer sends is validated: names, ids and versions. A version more than `clusterMaxClockSkewMs` (1 hour)
+ahead of the receiving node's clock is refused, so a node with a badly wrong clock fails loudly instead of pushing
+everyone's clock forward. Keep the real skew far below that with NTP.
 
-Two classes of key have cluster-wide constraints: `scriptsEnabled` and the `script*`
-sandbox keys must be **uniform**, because the sandbox comes from the executing node; and
-`clusterExpectedSize` should match the steady-state node count so the write-quorum majority
-is computed correctly before membership stabilizes; it must be **at least 2** whenever
-`clusterEnabled=true`, because a lone node evicts its peers after `deadEvictionMs` and then
-satisfies its own quorum, letting both sides of a partition accept divergent writes.
-`scriptLocalityWeight` is explicitly per-node.
+Forwarded requests carry the name of the user who sent them, and the node that runs them checks that user's
+permissions again. But that name is whatever the sender says, so anyone with the cluster secret can act as any user.
+The secret and mutual TLS are the trust boundary, so treat the secret like an admin password.
 
 ## Operations runbook
+### Starting a cluster
 
-- **First node:** set `clusterEnabled=true`, a unique `clusterAdvertisedAddress`, a
-  `clusterSecret` of at least 32 characters, and leave `clusterSeeds` empty.
-- **Additional nodes:** the same settings, with `clusterSeeds` pointing at one or more
-  existing nodes. A new node joins automatically on start.
-- **Sizing:** set `clusterExpectedSize` to the steady-state node count.
-- **Security:** use a strong shared `clusterSecret` (at least 32 characters, enforced at
-  startup) and enable `clusterTlsEnabled` with ONE keystore shared by every node: it is both
-  each node's identity and the trust store the cluster listener checks client certificates
-  against, so a node with a different keystore cannot join. Keep `clusterMaxClockSkewMs` above
-  the worst real clock skew between nodes (NTP keeps it far below the 1 hour default).
-- **Rolling upgrades:** every node must run the same build. Admin replication ships versioned
-  records (`REPLICATE_ADMIN` and `ADMIN_SNAPSHOT` changed shape, and `REPLICATE_USER` is gone), so
-  a node on an older build neither applies nor answers them; an older node also reports `0`
-  script load, which attracts placement it should not. The `HELLO` handshake, mutual TLS and the
-  32-character secret rule also require the same build everywhere: an older node never sends
-  `HELLO`, so a newer node closes its connections and mixed clusters do not form.
-- **Removing a node:** drain its traffic at the load balancer first — there is no LEAVE
-  message, so peers wait out `deadTimeoutMs` before reassigning its collections.
+Start the first node with `clusterEnabled=true`, its `clusterAdvertisedAddress`, the `clusterSecret`,
+`clusterExpectedSize` and no seeds. Start the others the same way, with `clusterSeeds` pointing at a running node. They
+join on their own. A standalone node that already holds data can be the first node: its data is kept and copied to the
+new ones. Merging two nodes that both hold data is not supported.
+
+### Adding a node
+
+Start it with seeds and an empty data folder. It gets the admin metadata and every document from the others through
+anti-entropy, some collections move to it, and it isn't picked for scripts until it has caught up. Update
+`clusterExpectedSize` in every node's configuration so the next restart uses the right majority.
+
+### Removing a node
+
+Drain its client traffic at the load balancer, then stop it. The others take over its collections after `deadTimeoutMs`,
+and writes to them answer `503-4` until then. The node still counts toward the size of the cluster until it is evicted
+after `deadEvictionMs` (24 hours), so for that day the majority doesn't shrink. Lower `clusterExpectedSize` on the
+remaining nodes.
+
+### When a node dies
+
+Nothing to do right away: the others take over its collections after `deadTimeoutMs`. Restart it when you can and it
+catches up through anti-entropy. If it was down for longer than `tombstoneRetentionMs`, don't bring its old data back,
+or deleted documents come back with it: start it with an empty data folder instead, as a replacement.
+
+### Replacing a node
+
+Start the new node with an empty data folder and seeds, like adding one. The dead node still counts toward the size of
+the cluster until it is evicted, so for a day a three-node cluster counts four and needs three nodes up to accept
+writes.
+
+### Upgrading
+
+Every node must run the same build, so there are no rolling upgrades: stop every node, replace the jar and start them
+again. See [Upgrades](operations.md#upgrades) for the rest.
+
+### Backups
+
+`--dump` against any node reads a snapshot of what that node has applied, which can be a moment behind the owners. A
+snapshot never splits a transaction.
+
+### A transaction stuck in doubt
+
+Bring the coordinator back if you can. Otherwise decide the outcome from `LIST_TRANSACTIONS` and force it with
+`RESOLVE_TRANSACTION`, as described in [Transactions](#transactions).

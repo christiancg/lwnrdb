@@ -4,10 +4,10 @@ import random
 import select
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import base_utils as bu
-from base_utils import Conn, check, check_code, check_status, section
+from base_utils import Conn, check, check_code, check_field, check_status, section
 
 HOST = os.environ.get("LISTEN_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("LISTEN_TEST_PORT", "8989"))
@@ -215,6 +215,58 @@ def test_push_on_delete(writer: Conn, listener: Conn):
         check("push results no longer contain deleted document",
                    not any(d.get("_id") == "del-target" for d in (pushed.get("results") or [])),
                    "del-target still present in pushed results")
+
+    stop_listen(listener, listen_id)
+
+
+def test_push_on_delete_by_condition(writer: Conn, listener: Conn):
+    section("LISTEN: one push when a DELETE with a condition empties the result")
+
+    for doc_id in ("cond-1", "cond-2", "cond-3"):
+        save_doc(writer, {"_id": doc_id, "kind": "condemned"})
+    time.sleep(0.3)
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "condemned"}}]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the conditional delete", r, "OK")
+    listen_id = r.get("listenId")
+
+    deleted = writer.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL,
+                           "condition": steps[0]["operator"]})
+    check_field("the conditional delete removed all three", deleted, "deletedCount", 3)
+
+    pushed = listener.recv(timeout=5.0)
+    check("push received after the conditional delete", pushed is not None, "no push message within 5 s")
+    if pushed is not None:
+        check("the pushed result is empty", not (pushed.get("results") or []), f"got {pushed.get('results')!r}")
+    extra = listener.recv(timeout=1.0)
+    check("one delete of three documents pushed once", extra is None, f"second push: {extra!r}")
+
+    stop_listen(listener, listen_id)
+
+
+def test_push_on_save_by_condition(writer: Conn, listener: Conn):
+    section("LISTEN: one push when a SAVE with a condition changes the result")
+
+    for doc_id in ("upd-1", "upd-2", "upd-3"):
+        save_doc(writer, {"_id": doc_id, "kind": "queued"})
+    time.sleep(0.3)
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "queued"}}]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the conditional save", r, "OK")
+    listen_id = r.get("listenId")
+
+    updated = writer.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                           "condition": steps[0]["operator"], "object": {"kind": "processed"}})
+    check_field("the conditional save moved all three out of the result", updated, "updatedCount", 3)
+
+    pushed = listener.recv(timeout=5.0)
+    check("push received after the conditional save", pushed is not None, "no push message within 5 s")
+    if pushed is not None:
+        check("the pushed result is empty", not (pushed.get("results") or []), f"got {pushed.get('results')!r}")
+    extra = listener.recv(timeout=1.0)
+    check("one update of three documents pushed once", extra is None, f"second push: {extra!r}")
 
     stop_listen(listener, listen_id)
 
@@ -854,6 +906,29 @@ def test_dropping_a_joined_collection_ends_the_listen(writer: Conn, listener: Co
         writer.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": joined})
 
 
+def test_a_push_and_a_reply_on_one_connection_arrive_in_either_order(listener: Conn):
+    section("LISTEN: a listen's end and the reply that caused it share one connection in either order")
+    coll = "listen_same_conn_drop"
+    listener.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    r = listen(listener, [], coll)
+    check_status("LISTEN registered on the collection the same connection drops", r, "OK")
+    listen_id = r.get("listenId")
+    try:
+        bu.send_without_reading(listener, {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+        frames = [listener.recv(timeout=5.0), listener.recv(timeout=5.0)]
+        replies = [f for f in frames if f is not None and f.get("type") == "DROP_COLLECTION"]
+        pushes = [f for f in frames if f is not None and f.get("type") == "LISTEN"]
+        check("the DROP_COLLECTION reply arrives", len(replies) == 1 and replies[0].get("status") == "OK",
+              f"frames: {frames!r}")
+        check("the listen's end arrives on the same connection", len(pushes) == 1
+              and pushes[0].get("errorCode") == "410-1" and pushes[0].get("listenId") == listen_id,
+              f"frames: {frames!r}")
+        pushed = listener.recv(timeout=2.0)
+        check("nothing else follows", pushed is None, f"unexpected frame: {pushed!r}")
+    finally:
+        listener.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+
+
 def test_listener_survives_a_concurrent_bulk_save(writer_conn: Conn, listener_conn: Conn):
     section("A re-run during a bulk save still answers correctly")
     started = listen(listener_conn, [{"type": "FILTER",
@@ -1081,6 +1156,8 @@ def main():
                 test_push_on_matching_insert(writer_conn, listener_conn)
                 test_no_push_on_non_matching_insert(writer_conn, listener_conn)
                 test_push_on_delete(writer_conn, listener_conn)
+                test_push_on_delete_by_condition(writer_conn, listener_conn)
+                test_push_on_save_by_condition(writer_conn, listener_conn)
                 test_push_on_geo_distance_match(writer_conn, listener_conn)
                 test_no_push_on_geo_distance_non_match(writer_conn, listener_conn)
                 test_push_on_geo_within_match(writer_conn, listener_conn)
@@ -1102,6 +1179,7 @@ def main():
                 test_a_revoked_reader_is_told_its_listen_ended(writer_conn)
                 test_dropping_the_collection_ends_the_listen(writer_conn, listener_conn)
                 test_dropping_a_joined_collection_ends_the_listen(writer_conn, listener_conn)
+                test_a_push_and_a_reply_on_one_connection_arrive_in_either_order(listener_conn)
                 test_disconnect_cleanup(writer_conn)
                 test_a_non_reading_listener_is_disconnected_and_others_still_notified(writer_conn)
 

@@ -35,6 +35,41 @@ public class ServerMainStartupOrderTest {
     }
 
     @Test
+    public void theShadowIsInstalledAfterTheSyncGuardAndBeforeAdminCreation() throws IOException {
+        final var body = mainBody();
+        final var install = positionOf(body, "installDurableShadowIfConfigured();");
+
+        assertTrue(positionOf(body, "DeviceSyncGuard.fallBackWhenUnsyncable(fs);") < install,
+                "the guard may turn syncWrites off, and the shadow must record the forces that remain");
+        assertTrue(install < positionOf(body, "fs.createAdminDatabase();"),
+                "every force from the first admin write on must be recorded, or a strict rebuild drops it");
+    }
+
+    @Test
+    public void test_the_format_check_runs_before_anything_is_written_or_deleted() throws IOException {
+        final var body = mainBody();
+        final var check = positionOf(body, "StorageFormatGuard.refuseIncompatibleFolder(fs);");
+
+        assertTrue(positionOf(body, "fs.createBaseDbPath();") < check, "the check reads the stamp in the db folder");
+        assertTrue(check < positionOf(body, "clearSnapshotsOfAPreviousProcess();"),
+                "a refused folder must keep its snapshot images, so the check precedes the clean-up that deletes them");
+        assertTrue(check < positionOf(body, "DeviceSyncGuard.fallBackWhenUnsyncable(fs);"),
+                "the sync probe writes into the folder, and a refused folder must be left as it was");
+    }
+
+    @Test
+    public void test_the_folder_is_stamped_after_the_shadow_and_before_the_admin_database() throws IOException {
+        final var body = mainBody();
+        final var stamp = positionOf(body, "StorageFormatGuard.stampIfUnstamped(fs);");
+
+        assertTrue(positionOf(body, "StorageFormatGuard.refuseIncompatibleFolder(fs);") < stamp);
+        assertTrue(positionOf(body, "installDurableShadowIfConfigured();") < stamp,
+                "the shadow must record the stamp's force, or a strict rebuild drops the stamp");
+        assertTrue(stamp < positionOf(body, "fs.createAdminDatabase();"),
+                "an admin database without a stamp must only ever mean a folder written before the stamp existed");
+    }
+
+    @Test
     public void test_the_clock_is_seeded_before_transaction_recovery() throws IOException {
         final var body = mainBody();
 
@@ -75,6 +110,17 @@ public class ServerMainStartupOrderTest {
         assertTrue(positionOf(body, "startClusterIfEnabled();") < positionOf(body, RECOVER_LOCAL),
                 "every user write is refused for lack of quorum until the ownership ring is built, so a replay"
                         + " submitted before the join burns its attempts and dead-letters");
+    }
+
+    @Test
+    public void test_the_metrics_endpoint_starts_after_its_warning_and_before_the_cluster() throws IOException {
+        final var body = mainBody();
+        final var metrics = positionOf(body, "startMetricsIfEnabled();");
+
+        assertTrue(positionOf(body, "StartupWarnings.warnIfMetricsExposedWithoutToken();") < metrics,
+                "the operator reads why an exposed endpoint is risky before it accepts a scrape");
+        assertTrue(metrics < positionOf(body, "startClusterIfEnabled();"),
+                "a metricsPort that cannot be bound stops the start before the node joins a cluster");
     }
 
     @Test

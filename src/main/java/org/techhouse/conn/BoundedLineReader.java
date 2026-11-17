@@ -65,6 +65,10 @@ public final class BoundedLineReader {
         }
     }
 
+    public boolean hasBufferedInput() {
+        return end > start;
+    }
+
     private int findNewline() {
         for (var i = start + scanned; i < end; i++) {
             if (buffer[i] == LINE_FEED) {

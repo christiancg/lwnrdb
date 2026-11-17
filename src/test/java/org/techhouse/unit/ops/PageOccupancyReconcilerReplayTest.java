@@ -10,8 +10,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.bckg_ops.events.EntityEvent;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ioc.IocContainer;
@@ -48,12 +46,6 @@ public class PageOccupancyReconcilerReplayTest {
         return new PkIndexEntry(dbName, collName, id, 0L, 0L, page, 0L);
     }
 
-    private List<EntityEvent> queuedUpdates() throws Exception {
-        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
-        return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast)
-                .filter(event -> event.getType() == EventType.UPDATED).toList();
-    }
-
     @Test
     public void test_replayed_ids_are_marked_and_queued_with_their_generation() throws Exception {
         final var replayed = PageOccupancyReconciler
@@ -66,11 +58,10 @@ public class PageOccupancyReconcilerReplayTest {
 
         PageOccupancyReconciler.scheduleIndexRepairFor(replayed);
 
-        final var updates = queuedUpdates();
-        assertEquals(List.of("a", "b"), updates.stream().map(EntityEvent::getId).toList());
-        assertEquals(List.of(0L, 1L), updates.stream().map(event -> event.getEntity().page()).toList());
-        assertTrue(
-                updates.stream().allMatch(event -> event.getPendingGeneration() == replayed.getFirst().generation()));
+        final var repairs = QueuedRepairs.of(stubTaskManager);
+        assertEquals(1, repairs.size(), "one repair pass per collection, not one event per id");
+        assertEquals(List.of("a", "b"), repairs.getFirst().getIds());
+        assertEquals(replayed.getFirst().generation(), repairs.getFirst().getPendingGeneration());
     }
 
     @Test
@@ -92,6 +83,6 @@ public class PageOccupancyReconcilerReplayTest {
 
         assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, UNREGISTERED).isEmpty(),
                 "marks nobody will drain would keep a checkpoint writing the marker forever");
-        assertEquals(List.of(), queuedUpdates());
+        assertEquals(List.of(), QueuedRepairs.of(stubTaskManager));
     }
 }

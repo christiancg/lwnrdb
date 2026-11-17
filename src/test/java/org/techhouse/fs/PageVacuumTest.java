@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -20,10 +21,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.test.TestUtils;
 
 public class PageVacuumTest {
@@ -115,9 +118,10 @@ public class PageVacuumTest {
     public void theRewrittenPageIsOwnerOnlyAndNoTempFileIsLeft() throws Exception {
         rf.vacuum.vacuum(DB, COLL, 0, pageRows());
 
+        assertFalse(rf.fx.paths.vacuumFile(DB, COLL, 0).exists());
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has owner-only permission bits");
         assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
                 Files.getPosixFilePermissions(rf.fx.page(0).toPath()));
-        assertFalse(rf.fx.paths.vacuumFile(DB, COLL, 0).exists());
     }
 
     @Test
@@ -145,7 +149,7 @@ public class PageVacuumTest {
         final var rows = rf.fx.indexedRows();
         rf.replacer.delete(c);
 
-        rf.vacuum.vacuumAfterDelete(DB, COLL, 0, rows, new PageOccupancy(0L, 9L), "c");
+        rf.vacuum.vacuumAfterWrite(DB, COLL, 0, rows, new PageOccupancy(0L, 9L), WrittenRows.deleted("c"));
 
         assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
@@ -214,7 +218,7 @@ public class PageVacuumTest {
     public void theRowsOfAKnownPageAreFoundWithoutIteratingTheResidentRows() throws Exception {
         final var rows = new NeverIteratedRows(rf.fx.indexedRows());
 
-        rf.vacuum.vacuum(DB, COLL, 0, rows, occupancyOf(pageRows()), null);
+        rf.vacuum.vacuumAfterWrite(DB, COLL, 0, rows, occupancyOf(pageRows()), WrittenRows.NONE);
 
         assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("c", "old-c")
                 + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
@@ -250,8 +254,23 @@ public class PageVacuumTest {
         rows.add(1, hole);
         final var before = Files.readAllBytes(rf.fx.page(0).toPath());
 
-        assertThrows(IOException.class,
-                () -> rf.vacuum.vacuum(DB, COLL, 0, rows, new PageOccupancy(0L, rows.size()), null));
+        assertThrows(IOException.class, () -> rf.vacuum.vacuumAfterWrite(DB, COLL, 0, rows,
+                new PageOccupancy(0L, rows.size()), WrittenRows.NONE));
+
+        assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
+        assertEquals(0, rf.intents());
+    }
+
+    @Test
+    public void aRowNamingAHoleAbortsWhenTheRowsArePointScanned() throws Exception {
+        rf.fx.store.appendRows(DB, COLL, List.of(new PkIndexEntry(DB, COLL, "b", rf.fx.indexed("a").getLength(),
+                rf.fx.indexed("c").getPosition() - rf.fx.indexed("a").getLength(), 0, StorageFixture.NEW_VERSION)));
+        final var before = Files.readAllBytes(rf.fx.page(0).toPath());
+
+        assertThrows(
+                IOException.class, () -> rf.vacuum.vacuumAfterWrite(DB, COLL, 0, PointScannedRows.INSTANCE,
+                        new PageOccupancy(0L, 4L), WrittenRows.NONE),
+                "the walk sees the row whose id has no line on the page");
 
         assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
         assertEquals(0, rf.intents());
@@ -265,7 +284,8 @@ public class PageVacuumTest {
         }
         final var before = Files.readAllBytes(rf.fx.page(0).toPath());
 
-        assertThrows(IOException.class, () -> rf.vacuum.vacuum(DB, COLL, 0, stale, new PageOccupancy(0L, 0L), null),
+        assertThrows(IOException.class,
+                () -> rf.vacuum.vacuumAfterWrite(DB, COLL, 0, stale, new PageOccupancy(0L, 0L), WrittenRows.NONE),
                 "a zero count never stands in for the walk before bytes are cut");
 
         assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
@@ -275,7 +295,7 @@ public class PageVacuumTest {
     public void aStaleCountFallsBackToTheExactWalk() throws Exception {
         final var rows = rf.fx.indexedRows();
 
-        rf.vacuum.vacuum(DB, COLL, 0, rows, new PageOccupancy(0L, 7L), null);
+        rf.vacuum.vacuumAfterWrite(DB, COLL, 0, rows, new PageOccupancy(0L, 7L), WrittenRows.NONE);
 
         assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("c", "old-c")
                 + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
@@ -296,5 +316,30 @@ public class PageVacuumTest {
         assertEquals(20L, moved.getPosition());
         assertEquals(80L, replaced.getPosition(), "a row no longer at the move's origin is left alone");
         assertEquals(90L, elsewhere.getPosition(), "a row on another page is left alone");
+    }
+
+    @Test
+    public void vacuumUsesAtMostFourSerialForces() throws Exception {
+        rf.vacuum.vacuum(DB, COLL, 0, pageRows());
+        rf.replacer.delete(rf.fx.indexed("c"));
+        final var caller = Thread.currentThread();
+        final var serial = new CopyOnWriteArrayList<String>();
+        final var all = new CopyOnWriteArrayList<String>();
+        try (var ignored = RecordingForcer.install(true)) {
+            TestUtils.setPrivateStaticField(SyncedWrites.class, "forcer", (Forcer) (_, path) -> {
+                all.add(String.valueOf(path.getFileName()));
+                if (Thread.currentThread() == caller) {
+                    serial.add(String.valueOf(path.getFileName()));
+                }
+            });
+
+            rf.vacuum.vacuum(DB, COLL, 0, pageRows());
+        }
+
+        assertTrue(serial.size() <= 4, "serial forces: " + serial + " of " + all);
+        assertEquals(Set.of(COLL + "-0.dat", COLL + ".intents", COLL + "-0.vacuum"), Set.copyOf(all.subList(0, 3)),
+                "the page, the intent and the temp file are forced together first");
+        assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+        assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
     }
 }

@@ -23,6 +23,7 @@ import org.techhouse.ejson.internal.ShapeTable;
 
 public class ShapeTableTest {
     private static final int RACERS = 8;
+    private static final int ATTACK_BLOCKS = 5;
     private static final String[] KEYS = {"_id", "name", "price"};
 
     @Test
@@ -153,5 +154,29 @@ public class ShapeTableTest {
 
         assertNull(table.shapeOf(new String[]{"_id", longKey}, 0, 2));
         assertNotNull(table.shapeOf(new String[]{"_id", longKey.substring(1)}, 0, 2));
+    }
+
+    private static String blocks(int mask) {
+        final var key = new StringBuilder();
+        for (var block = 0; block < ATTACK_BLOCKS; block++) {
+            key.append((mask >>> block & 1) == 0 ? "Aa" : "BB");
+        }
+        return key.toString();
+    }
+
+    @Test
+    public void anotherTenantsPinsCannotBlockAShape() {
+        final var table = new ShapeTable(Globals.SHAPE_TABLE_SLOTS, Globals.SHAPE_TABLE_MAX_PINNED,
+                Globals.KEY_TABLE_PIN_HITS);
+        for (var mask = 1; mask < 1 << ATTACK_BLOCKS; mask++) {
+            final var attacker = new String[]{blocks(mask)};
+            for (var use = 0; use <= Globals.KEY_TABLE_PIN_HITS; use++) {
+                table.shapeOf(attacker, 0, 1);
+            }
+        }
+        final var victim = new String[]{blocks(0)};
+
+        final var first = table.shapeOf(victim, 0, 1);
+        assertSame(first, table.shapeOf(victim, 0, 1));
     }
 }

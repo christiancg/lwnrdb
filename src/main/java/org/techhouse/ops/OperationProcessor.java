@@ -1,9 +1,6 @@
 package org.techhouse.ops;
 
-import java.util.List;
 import java.util.UUID;
-import org.techhouse.cache.Cache;
-import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Transaction;
 import org.techhouse.ex.PartialBulkSaveException;
@@ -46,8 +43,10 @@ import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.ReadSnapshotRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ReleaseFaultRequest;
+import org.techhouse.ops.req.ReleaseSnapshotRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.RunScriptRequest;
@@ -56,16 +55,18 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
+import org.techhouse.ops.req.ServerInfoRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.ops.req.StartSnapshotRequest;
 import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.resp.CloseConnectionResponse;
-import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
+import org.techhouse.ops.snapshot.SnapshotOperationHelper;
 
 public class OperationProcessor {
-    private final Cache cache = IocContainer.get(Cache.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
@@ -113,6 +114,7 @@ public class OperationProcessor {
             case DELETE_SCHEMA -> processDeleteSchema((DeleteSchemaRequest) operationRequest);
             case GET_SCHEMA -> processGetSchema((GetSchemaRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
+            case SERVER_INFO -> processServerInfo((ServerInfoRequest) operationRequest, actingUser);
             case AUTHENTICATE ->
                 UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
             case CREATE_USER -> UserOperationHelper.processCreateUser((CreateUserRequest) operationRequest);
@@ -149,11 +151,30 @@ public class OperationProcessor {
             case CANCEL_SCRIPT -> processCancelScript((CancelScriptRequest) operationRequest);
             case LIST_TRIGGER_RUNS -> processListTriggerRuns((ListTriggerRunsRequest) operationRequest);
             case RESOLVE_TRIGGER_RUN -> processResolveTriggerRun((ResolveTriggerRunRequest) operationRequest);
+            case START_SNAPSHOT -> processStartSnapshot((StartSnapshotRequest) operationRequest, clientId, actingUser);
+            case READ_SNAPSHOT -> processReadSnapshot((ReadSnapshotRequest) operationRequest, clientId);
+            case RELEASE_SNAPSHOT -> processReleaseSnapshot((ReleaseSnapshotRequest) operationRequest, clientId);
             case ARM_FAULT -> FaultOperationHelper.arm((ArmFaultRequest) operationRequest);
             case AWAIT_FAULT -> FaultOperationHelper.await((AwaitFaultRequest) operationRequest);
             case RELEASE_FAULT -> FaultOperationHelper.release((ReleaseFaultRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, response, restamped);
+    }
+
+    private OperationResponse processStartSnapshot(StartSnapshotRequest request, UUID clientId, String actingUser) {
+        return SnapshotOperationHelper.start(request, clientId, actingUser);
+    }
+
+    private OperationResponse processReadSnapshot(ReadSnapshotRequest request, UUID clientId) {
+        return SnapshotOperationHelper.read(request, clientId);
+    }
+
+    private OperationResponse processReleaseSnapshot(ReleaseSnapshotRequest request, UUID clientId) {
+        return SnapshotOperationHelper.release(request, clientId);
+    }
+
+    private OperationResponse processServerInfo(ServerInfoRequest request, String actingUser) {
+        return ServerInfoHelper.process(request, actingUser);
     }
 
     private OperationResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
@@ -353,12 +374,19 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
+        if (saveRequest.getCondition() != null) {
+            return processSaveWhere(saveRequest, actingUser);
+        }
         return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING,
                 GroupCommit.forSave(saveRequest), effects -> {
                     final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, dbName,
                             collName);
                     if (ownershipError != null) {
                         return GroupCommit.answered(ownershipError);
+                    }
+                    final var existsError = InsertOnlyGuard.check(saveRequest);
+                    if (existsError != null) {
+                        return GroupCommit.answered(existsError);
                     }
                     final var schemaError = SchemaValidationHelper.check(saveRequest);
                     if (schemaError != null) {
@@ -376,6 +404,22 @@ public class OperationProcessor {
                 });
     }
 
+    private OperationResponse processSaveWhere(SaveRequest request, String actingUser) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
+            final var update = ConditionalSave.prepare(request, actingUser);
+            if (update.answered() != null) {
+                return update.answered();
+            }
+            final var merged = update.merged();
+            final var staged = TriggerHelper.stageBulkSave(merged, actingUser);
+            return SaveWhereResponse.answering(
+                    ClusterWriteHelper.afterBulkSave(dbName, collName, TriggerHelper.runStaged(staged, dbName, collName,
+                            actingUser, request.getTriggerDepth(), () -> SaveOperationHelper.executeBulkSave(merged))));
+        });
+    }
+
     private OperationResponse processDeleteOperation(DeleteRequest deleteRequest, Transaction activeTransaction,
             String actingUser) {
         final var dbName = deleteRequest.getDatabaseName();
@@ -386,6 +430,9 @@ public class OperationProcessor {
         final var guardError = ClusterWriteHelper.guard(OperationType.DELETE, dbName, collName);
         if (guardError != null) {
             return guardError;
+        }
+        if (deleteRequest.getCondition() != null) {
+            return processDeleteWhere(deleteRequest, actingUser);
         }
         return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.DELETE,
                 ErrorCode.ERROR_DELETING, GroupCommit.forDelete(deleteRequest), effects -> {
@@ -418,40 +465,35 @@ public class OperationProcessor {
                 });
     }
 
-    private OperationResponse processListUsers(ListUsersRequest request) {
-        final var lockSet = List
-                .of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME));
-        return OperationLocks.withReadLocks(request.isDirtyRead(), lockSet, OperationType.LIST_USERS,
-                ErrorCode.ERROR_LISTING_USERS, () -> {
-                    final var ownedByUser = UserOperationHelper.ownedDatabasesByUser(cache.getAllAdminDbEntries());
-                    final var userStream = cache.getAllAdminUserEntries().stream()
-                            .map(user -> user.toResponseJson(ownedByUser.getOrDefault(user.get_id(), List.of())));
-                    final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
-                            userStream);
-                    return results.isEmpty()
-                            ? new OperationResponse(OperationType.LIST_USERS, ErrorCode.NO_USERS_FOUND)
-                            : new ListUsersResponse("Ok", results);
+    private OperationResponse processDeleteWhere(DeleteRequest request, String actingUser) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
+                () -> {
+                    final var deletion = ConditionalDelete.prepare(request, actingUser);
+                    if (deletion.refusal() != null) {
+                        return deletion.refusal();
+                    }
+                    final var staged = TriggerHelper.stageDeleteMany(request, deletion.captured(), actingUser);
+                    return deletion.replicated(TriggerHelper.runStaged(staged, dbName, collName, actingUser,
+                            request.getTriggerDepth(), deletion::execute));
                 });
     }
 
+    private OperationResponse processListUsers(ListUsersRequest request) {
+        return UserOperationHelper.processListUsers(request);
+    }
+
     private OperationResponse processSaveSchema(SaveSchemaRequest request) {
-        final var dbName = request.getDatabaseName();
-        final var collName = request.getCollectionName();
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_SCHEMA,
-                ErrorCode.ERROR_SAVING_SCHEMA, () -> SchemaOperationHelper.executeSaveSchema(request));
+        return SchemaOperationHelper.processSaveSchema(request);
     }
 
     private OperationResponse processDeleteSchema(DeleteSchemaRequest request) {
-        final var dbName = request.getDatabaseName();
-        final var collName = request.getCollectionName();
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_SCHEMA,
-                ErrorCode.ERROR_DELETING_SCHEMA, () -> SchemaOperationHelper.executeDeleteSchema(request));
+        return SchemaOperationHelper.processDeleteSchema(request);
     }
 
     private OperationResponse processGetSchema(GetSchemaRequest request) {
-        final var collectionId = Cache.getCollectionIdentifier(request.getDatabaseName(), request.getCollectionName());
-        return OperationLocks.withReadLocks(false, List.of(collectionId), OperationType.GET_SCHEMA,
-                ErrorCode.ERROR_RETRIEVING, () -> SchemaOperationHelper.executeGetSchema(request));
+        return SchemaOperationHelper.processGetSchema(request);
     }
 
 }

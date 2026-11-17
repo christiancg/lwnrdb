@@ -189,13 +189,14 @@ public class PkIndexLogTest {
     }
 
     @Test
-    public void anAppendAfterAnOutsideWriteFoldsTheFileFirst() throws IOException {
+    public void anAppendAfterAForgottenOutsideWriteFoldsTheFileFirst() throws IOException {
         store.appendRows(DB, COLL, List.of(row("a", 0, 1)));
         final var outside = new StringBuilder();
         for (var i = 0; i < Globals.PK_LOG_MIN_DEAD_ROWS * 2; i++) {
             outside.append(row("a", i, i).toFileEntry()).append(Globals.NEWLINE);
         }
         Files.writeString(pkIndexFile().toPath(), outside, StandardCharsets.UTF_8, StandardOpenOption.APPEND);
+        PkIndexStore.forgetState(pkIndexFile());
 
         store.appendReplacements(DB, COLL, List.of(row("a", 99_999, 9)));
 

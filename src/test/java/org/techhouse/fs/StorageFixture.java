@@ -44,6 +44,7 @@ final class StorageFixture {
             final var text = record(id, "old-" + id);
             Files.writeString(page(page).toPath(), text, StandardCharsets.UTF_8, StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND);
+            PageLengths.forget(page(page));
             store.appendRows(dbName, collName, List.of(new PkIndexEntry(dbName, collName, id, position,
                     text.getBytes(StandardCharsets.UTF_8).length, page, OLD_VERSION)));
         }

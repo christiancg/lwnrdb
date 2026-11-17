@@ -24,6 +24,8 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.simplejs.values.EJsonInterop;
+import org.techhouse.utils.FieldPath;
+import org.techhouse.utils.FieldPathMemo;
 import org.techhouse.utils.JsonUtils;
 
 public final class MapOperatorHelper {
@@ -37,7 +39,7 @@ public final class MapOperatorHelper {
     public static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineContext context) {
         final var writtenRoots = JsonUtils.writeTreeOf(Collections.singletonList(operator.getFieldName())).roots();
         return processOperator(operator, toMap, context, new MapResultBudget(context),
-                conditionOf(operator, context, writtenRoots), writtenRoots);
+                conditionOf(operator, context, writtenRoots), writtenRoots, new FieldPathMemo());
     }
 
     static Predicate<JsonObject> conditionOf(MapOperator operator, PipelineContext context, Set<String> writtenRoots) {
@@ -46,52 +48,51 @@ public final class MapOperatorHelper {
     }
 
     static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineContext context,
-            MapResultBudget budget, Predicate<JsonObject> condition, Set<String> writtenRoots) {
+            MapResultBudget budget, Predicate<JsonObject> condition, Set<String> writtenRoots, FieldPathMemo paths) {
         if (condition != null && !condition.test(toMap)) {
             return toMap;
         }
         return switch (operator.getType()) {
-            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context, budget, writtenRoots);
-            case REMOVE_FIELD -> removeField((RemoveFieldMapOperator) operator, toMap);
+            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context, budget, writtenRoots, paths);
+            case REMOVE_FIELD -> removeField((RemoveFieldMapOperator) operator, toMap, paths);
         };
     }
 
     private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineContext context,
-            MapResultBudget budget, Set<String> writtenRoots) {
-        final var addFieldName = operator.getFieldName();
+            MapResultBudget budget, Set<String> writtenRoots, FieldPathMemo paths) {
+        final var target = paths.of(operator.getFieldName());
         final var midOperator = operator.getOperator();
         return switch (midOperator.getType()) {
-            case AVG -> avg((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case SUM -> sum((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case SUBS -> subs((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case MAX -> max((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case MIN -> min((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case MULTIPLY -> multiply((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case DIVIDE -> divide((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case POW -> pow((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case ROOT -> root((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case ABS -> abs((OneParamMidOperator) midOperator, addFieldName, toMap);
-            case SIZE -> size((OneParamMidOperator) midOperator, addFieldName, toMap);
-            case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap, budget);
-            case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap, budget);
-            case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context, budget, writtenRoots);
+            case AVG -> avg((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case SUM -> sum((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case SUBS -> subs((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case MAX -> max((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case MIN -> min((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case MULTIPLY -> multiply((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case DIVIDE -> divide((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case POW -> pow((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case ROOT -> root((ArrayParamMidOperator) midOperator, target, toMap, paths);
+            case ABS -> abs((OneParamMidOperator) midOperator, target, toMap, paths);
+            case SIZE -> size((OneParamMidOperator) midOperator, target, toMap, paths);
+            case CONCAT -> concat((ArrayParamMidOperator) midOperator, target, toMap, paths, budget);
+            case CAST -> cast((CastMidOperator) midOperator, target, toMap, paths, budget);
+            case SCRIPT -> script((ScriptMidOperator) midOperator, target, toMap, context, budget, writtenRoots);
         };
     }
 
-    private static JsonObject script(ScriptMidOperator midOperator, String addFieldName, JsonObject toMap,
+    private static JsonObject script(ScriptMidOperator midOperator, FieldPath target, JsonObject toMap,
             PipelineContext context, MapResultBudget budget, Set<String> writtenRoots) {
         final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, writtenRoots, context);
         if (value != null) {
             context.guardResultValue(EJsonInterop.estimatedBytes(value));
             budget.charge(JsonElementWriter.utf8Length(value));
-            JsonUtils.setPath(toMap, addFieldName, value);
+            target.set(toMap, value);
         }
         return toMap;
     }
 
-    private static JsonObject removeField(RemoveFieldMapOperator operator, JsonObject toMap) {
-        final var fieldName = operator.getFieldName();
-        JsonUtils.removePath(toMap, fieldName);
+    private static JsonObject removeField(RemoveFieldMapOperator operator, JsonObject toMap, FieldPathMemo paths) {
+        paths.of(operator.getFieldName()).remove(toMap);
         return toMap;
     }
 
@@ -107,11 +108,11 @@ public final class MapOperatorHelper {
         }
     }
 
-    private static JsonObject internalGenericArrayOperator(ArrayParamMidOperator midOperator, String addFieldName,
-            JsonObject obj, DoubleBinaryOperator fold) {
+    private static JsonObject internalGenericArrayOperator(ArrayParamMidOperator midOperator, FieldPath target,
+            JsonObject obj, FieldPathMemo paths, DoubleBinaryOperator fold) {
         var accumulator = Accumulator.EMPTY;
         for (final var operand : midOperator.getOperands()) {
-            final var operandValue = numericOperand(operand, obj);
+            final var operandValue = numericOperand(operand, obj, paths);
             if (operandValue == null) {
                 continue;
             }
@@ -119,11 +120,11 @@ public final class MapOperatorHelper {
                     ? new Accumulator(operandValue)
                     : new Accumulator(fold.applyAsDouble(accumulator.value(), operandValue));
         }
-        JsonUtils.setPath(obj, addFieldName, numberOrNull(finiteOrNull(accumulator.value())));
+        target.set(obj, numberOrNull(finiteOrNull(accumulator.value())));
         return obj;
     }
 
-    private static Double numericOperand(JsonBaseElement operand, JsonObject obj) {
+    private static Double numericOperand(JsonBaseElement operand, JsonObject obj, FieldPathMemo paths) {
         if (!operand.isJsonPrimitive()) {
             return null;
         }
@@ -133,7 +134,7 @@ public final class MapOperatorHelper {
         if (!operand.isJsonString()) {
             return null;
         }
-        final var resolved = JsonUtils.getFromPath(obj, operand.asJsonString().getValue());
+        final var resolved = paths.of(operand.asJsonString().getValue()).valueIn(obj);
         return !resolved.isJsonNull() && resolved.isJsonNumber() ? resolved.asJsonNumber().doubleValue() : null;
     }
 
@@ -141,68 +142,80 @@ public final class MapOperatorHelper {
         return value != null && Double.isFinite(value) ? value : null;
     }
 
-    private static JsonObject multiply(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        return internalGenericArrayOperator(midOperator, addFieldName, obj, (left, right) -> left * right);
+    private static JsonObject multiply(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
+        return internalGenericArrayOperator(midOperator, target, obj, paths, (left, right) -> left * right);
     }
 
-    private static JsonObject divide(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        return internalGenericArrayOperator(midOperator, addFieldName, obj, (left, right) -> left / right);
+    private static JsonObject divide(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
+        return internalGenericArrayOperator(midOperator, target, obj, paths, (left, right) -> left / right);
     }
 
-    private static JsonObject pow(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        return internalGenericArrayOperator(midOperator, addFieldName, obj, Math::pow);
+    private static JsonObject pow(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
+        return internalGenericArrayOperator(midOperator, target, obj, paths, Math::pow);
     }
 
-    private static JsonObject root(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        return internalGenericArrayOperator(midOperator, addFieldName, obj, (left, right) -> Math.pow(left, 1 / right));
+    private static JsonObject root(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
+        return internalGenericArrayOperator(midOperator, target, obj, paths,
+                (left, right) -> Math.pow(left, 1 / right));
     }
 
-    private static JsonObject sum(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        return internalGenericArrayOperator(midOperator, addFieldName, obj, Double::sum);
+    private static JsonObject sum(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
+        return internalGenericArrayOperator(midOperator, target, obj, paths, Double::sum);
     }
 
-    private static JsonObject subs(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        return internalGenericArrayOperator(midOperator, addFieldName, obj, (left, right) -> left - right);
+    private static JsonObject subs(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
+        return internalGenericArrayOperator(midOperator, target, obj, paths, (left, right) -> left - right);
     }
 
-    private static JsonObject avg(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
+    private static JsonObject avg(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
         var validSteps = 0;
         var total = 0d;
         for (final var operand : midOperator.getOperands()) {
-            final var operandValue = numericOperand(operand, obj);
+            final var operandValue = numericOperand(operand, obj, paths);
             if (operandValue != null) {
                 total += operandValue;
                 validSteps++;
             }
         }
         final Double average = validSteps == 0 ? null : total / validSteps;
-        JsonUtils.setPath(obj, addFieldName, numberOrNull(finiteOrNull(average)));
+        target.set(obj, numberOrNull(finiteOrNull(average)));
         return obj;
     }
 
-    private static JsonObject max(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        return internalGenericArrayOperator(midOperator, addFieldName, obj, Math::max);
+    private static JsonObject max(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
+        return internalGenericArrayOperator(midOperator, target, obj, paths, Math::max);
     }
 
-    private static JsonObject min(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        return internalGenericArrayOperator(midOperator, addFieldName, obj, Math::min);
+    private static JsonObject min(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
+        return internalGenericArrayOperator(midOperator, target, obj, paths, Math::min);
     }
 
-    private static JsonObject abs(OneParamMidOperator midOperator, String addFieldName, JsonObject obj) {
+    private static JsonObject abs(OneParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
         final var operand = midOperator.getOperand();
-        final var element = JsonUtils.getFromPath(obj, operand);
+        final var element = paths.of(operand).valueIn(obj);
         Double absValue = null;
         if (element.isJsonNumber()) {
             final var doubleValue = element.asJsonNumber().doubleValue();
             absValue = Math.abs(doubleValue);
         }
-        JsonUtils.setPath(obj, addFieldName, numberOrNull(absValue));
+        target.set(obj, numberOrNull(absValue));
         return obj;
     }
 
-    private static JsonObject size(OneParamMidOperator midOperator, String addFieldName, JsonObject obj) {
+    private static JsonObject size(OneParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths) {
         final var operand = midOperator.getOperand();
-        final var element = JsonUtils.getFromPath(obj, operand);
+        final var element = paths.of(operand).valueIn(obj);
         Integer size = null;
         if (element.isJsonString()) {
             final var stringValue = element.asJsonString().getValue();
@@ -211,12 +224,12 @@ public final class MapOperatorHelper {
             final var arrayValue = element.asJsonArray();
             size = arrayValue.size();
         }
-        JsonUtils.setPath(obj, addFieldName, numberOrNull(size));
+        target.set(obj, numberOrNull(size));
         return obj;
     }
 
-    private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj,
-            MapResultBudget budget) {
+    private static JsonObject concat(ArrayParamMidOperator midOperator, FieldPath target, JsonObject obj,
+            FieldPathMemo paths, MapResultBudget budget) {
         final var operands = midOperator.getOperands();
         StringBuilder result = new StringBuilder();
         for (var concatStep : operands) {
@@ -227,7 +240,7 @@ public final class MapOperatorHelper {
                     if (primitiveString.startsWith(Globals.STRING_LITERAL_PREFIX)) {
                         result.append(primitiveString.substring(Globals.STRING_LITERAL_PREFIX.length()));
                     } else {
-                        result.append(concatTextOf(JsonUtils.getFromPath(obj, primitiveString)));
+                        result.append(concatTextOf(paths.of(primitiveString).valueIn(obj)));
                     }
                 } else {
                     result.append(concatTextOf(concatStep));
@@ -246,7 +259,7 @@ public final class MapOperatorHelper {
             }
         }
         budget.charge(result);
-        JsonUtils.setPath(obj, addFieldName, new JsonString(result.toString()));
+        target.set(obj, new JsonString(result.toString()));
         return obj;
     }
 
@@ -298,11 +311,11 @@ public final class MapOperatorHelper {
         return "false".equalsIgnoreCase(text) ? JsonBoolean.of(false) : JsonNull.INSTANCE;
     }
 
-    private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj,
+    private static JsonObject cast(CastMidOperator midOperator, FieldPath target, JsonObject obj, FieldPathMemo paths,
             MapResultBudget budget) {
         final var fieldName = midOperator.getFieldName();
         final var type = midOperator.getToType();
-        final var field = JsonUtils.getFromPath(obj, fieldName);
+        final var field = paths.of(fieldName).valueIn(obj);
         JsonBaseElement casted = JsonNull.INSTANCE;
         if (!field.isJsonNull() && field.isJsonPrimitive()) {
             final var primitive = field.asJsonPrimitive();
@@ -358,7 +371,7 @@ public final class MapOperatorHelper {
         if (casted instanceof JsonCustom<?> || casted.isJsonString()) {
             budget.charge(concatTextOf(casted));
         }
-        JsonUtils.setPath(obj, addFieldName, casted);
+        target.set(obj, casted);
         return obj;
     }
 }

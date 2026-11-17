@@ -9,17 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Build once: compile, unit tests, coverage + all quality gates, then build the
-  # GraalVM native image and publish it as an artifact so the integration jobs
-  # don't have to rebuild. This is the long pole; everything below runs in
-  # parallel against the native binary.
-  #
-  # JDK 25, not 27: GraalVM has no JDK 26 or 27 release, and the regex engine resolves
-  # \p{...} against the build JDK's Unicode data - see the enforcer rule in pom.xml.
-  # ---------------------------------------------------------------------------
-  build:
-    name: Build & Verify
+  package:
+    name: Package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,40 +21,260 @@ jobs:
           cache: 'maven'
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install native-image build dependencies
-        # native-image links against the system C toolchain and zlib; these are
-        # usually present on ubuntu-latest but install them explicitly so the
-        # native build never fails on a missing dependency.
         run: sudo apt-get update && sudo apt-get install -y build-essential libz-dev
-      - name: Run Maven Verify
-        run: mvn -B --no-transfer-progress verify
-      - name: Build native image
-        # GraalVM is JAVA_HOME (set by setup-graalvm), so the native-maven-plugin
-        # finds native-image. Tests already ran in `verify`.
-        run: mvn -B --no-transfer-progress -Pnative package -DskipTests
-      - name: Upload native binary
+      - name: Package the jar and the native executable
+        run: mvn -B --no-transfer-progress -Pnative -DskipTests package
+      - name: Upload jar
+        uses: actions/upload-artifact@v7
+        with:
+          name: lwnrdb-jar
+          path: target/lwnrdb.jar
+          retention-days: 1
+      - name: Upload native executable
         uses: actions/upload-artifact@v7
         with:
           name: lwnrdb-native
           path: target/lwnrdb
           retention-days: 1
 
-  # ---------------------------------------------------------------------------
-  # Integration suites, fanned out across independent runners. Each leg gets its
-  # own runner VM, so every leg can reuse port 8989 / the default db folder
-  # without colliding, and the pgrep/pkill-based scripts (memory-extensive, bench)
-  # are each the sole server on their runner. The index suite needs caching
-  # disabled (maxMemory=-1); tls, bench and the script suites manage their own
-  # server lifecycle. fail-fast: false so one failing suite doesn't cancel the others.
-  #
-  # Every leg runs against the GraalVM native executable downloaded from `build`,
-  # which is what validates the META-INF/native-image reachability metadata end to
-  # end. LWNRDB_SERVER_BIN points the suites that launch their own server at the
-  # native binary; the shared server is launched from the same path so process
-  # matching (pgrep/pkill) is consistent.
-  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Plan the shards
+        run: python3 test_utils/tools/test_shards.py --shards 4 --out target/shards-plan
+      - name: Run shard ${{ matrix.shard }}
+        run: >-
+          mvn -B --no-transfer-progress -Pci-shard
+          -DtestShardFile=target/shards-plan/shard-${{ matrix.shard }}.txt -DskipSerialTests=true test
+      - name: Name the coverage data
+        if: always()
+        run: if [ -f target/jacoco.exec ]; then mv target/jacoco.exec target/jacoco-shard-${{ matrix.shard }}.exec; fi
+      - name: Upload coverage data and reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-shard-${{ matrix.shard }}
+          path: |
+            target/jacoco-shard-${{ matrix.shard }}.exec
+            target/surefire-reports/TEST-*.xml
+          retention-days: 1
+
+  unit-tests-serial:
+    name: Unit tests (serial)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run the single-fork executions
+        run: mvn -B --no-transfer-progress -Pci-shard -DskipShardedTests=true test
+      - name: Name the coverage data
+        if: always()
+        run: if [ -f target/jacoco.exec ]; then mv target/jacoco.exec target/jacoco-serial.exec; fi
+      - name: Upload coverage data and reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-serial
+          path: |
+            target/jacoco-serial.exec
+            target/surefire-reports/TEST-*.xml
+          retention-days: 1
+
+  coverage:
+    name: Coverage
+    needs: [unit-tests, unit-tests-serial]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download every shard's data
+        uses: actions/download-artifact@v8
+        with:
+          pattern: unit-*
+          path: target/shards
+      - name: Check every test class ran exactly once
+        run: python3 test_utils/tools/test_shards.py --check-complete target/shards
+      - name: Merge the coverage and apply the gate
+        run: >-
+          mvn -B --no-transfer-progress -Pci-coverage compile
+          jacoco:merge@merge-shards jacoco:report@report jacoco:check@jacoco-check
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: target/site/jacoco
+          retention-days: 7
+
+  static-spotbugs:
+    name: Static gates (SpotBugs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run SpotBugs
+        run: >-
+          mvn -B --no-transfer-progress -DskipTests -Dspotless.check.skip -Dcheckstyle.skip -Dpmd.skip -Dcpd.skip
+          verify
+
+  static-style:
+    name: Static gates (style)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run Spotless, Checkstyle, CPD and PMD
+        run: mvn -B --no-transfer-progress -DskipTests -Dspotbugs.skip verify
+
+  java-client:
+    name: Java client (JDK ${{ matrix.jdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ['17', '27']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: ${{ matrix.jdk }}
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Verify the client (unit tests, coverage, style, PMD, SpotBugs, API docs)
+        run: mvn -B --no-transfer-progress -f clients/java/pom.xml verify
+      - name: Test the client against Spring Boot's Jackson
+        run: >-
+          mvn -B --no-transfer-progress -f clients/java/pom.xml -Djackson.version=3.1.7 -Djacoco.skip=true
+          -pl lwnrdb-client,lwnrdb-spring-data,lwnrdb-spring-boot-starter -am test
+      - name: Build the Javadoc and sources jars
+        run: mvn -B --no-transfer-progress -f clients/java/pom.xml -P javadoc -DskipTests -Djacoco.skip=true package
+      - name: Install the snapshot for the consumers
+        run: mvn -B --no-transfer-progress -f clients/java/pom.xml -DskipTests -Djacoco.skip=true install
+      - name: Compile the Maven consumer
+        run: mvn -B --no-transfer-progress -f clients/java/consumers/maven/pom.xml compile
+      - name: Compile the Spring Boot consumer
+        run: mvn -B --no-transfer-progress -f clients/java/consumers/spring-boot/pom.xml compile
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '9.8.2'
+      - name: Build the Gradle consumer
+        run: gradle -p clients/java/consumers/gradle build --no-daemon
+
+  typescript-client:
+    name: TypeScript client (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
+    defaults:
+      run:
+        working-directory: clients/typescript
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Verify the client (format, ESLint, types, unit tests, coverage, API docs, build)
+        run: npm run verify
+      - name: Check the ESM, CommonJS and TypeScript consumers against the packed tarball
+        run: npm run consumers
+      - name: Check type resolution of the packed tarball
+        run: npx --yes @arethetypeswrong/cli@0.18.5 --pack --profile esm-only
+
+  python-client:
+    name: Python client (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13', '3.15']
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: clients/python/pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev -e .
+      - name: Verify the client (format, lint, mypy --strict, unit tests, coverage, API docs, build, consumers)
+        run: python build_tools/verify.py
+
+  dotnet-client:
+    name: .NET client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/dotnet
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            10.0.x
+            11.0.x
+      - name: Check formatting
+        run: dotnet format Lwnrdb.slnx --verify-no-changes
+      - name: Build (analyzers and warnings as errors, API docs through DocGen)
+        run: dotnet build Lwnrdb.slnx -c Release
+      - name: Unit tests with 95% line and 90% branch coverage (net10.0)
+        run: dotnet test tests/Lwnrdb.Client.Tests -c Release -f net10.0 --no-build /p:CollectCoverage=true /p:Threshold=\"95,90\" /p:ThresholdType=\"line,branch\" /p:ThresholdStat=total
+      - name: Unit tests (net11.0)
+        run: dotnet test tests/Lwnrdb.Client.Tests -c Release -f net11.0 --no-build
+      - name: Pack and run the consumer against the package
+        run: |
+          dotnet pack src/Lwnrdb.Client -c Release -o artifacts --no-build
+          dotnet run --project consumers/Console
+
   integration:
     name: ${{ matrix.name }}
-    needs: build
+    needs: package
     runs-on: ubuntu-latest
     env:
       LWNRDB_SERVER_BIN: ${{ github.workspace }}/target/lwnrdb
@@ -144,6 +355,35 @@ jobs:
             run: |
               python3 test_utils/test_client.py
 
+          - name: client-java
+            start_server: false
+            run: |
+              mvn -B --no-transfer-progress -f clients/java/pom.xml verify -Pintegration -Dtest=NONE \
+                -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true \
+                -Dlwnrdb.jar="$GITHUB_WORKSPACE/target/lwnrdb.jar"
+
+          - name: client-typescript
+            start_server: false
+            node: true
+            run: |
+              npm ci --prefix clients/typescript
+              LWNRDB_JAR="$GITHUB_WORKSPACE/target/lwnrdb.jar" npm run test:it --prefix clients/typescript
+
+          - name: client-dotnet
+            start_server: false
+            dotnet: true
+            run: |
+              LWNRDB_JAR="$GITHUB_WORKSPACE/target/lwnrdb.jar" dotnet test clients/dotnet/tests/Lwnrdb.Client.IntegrationTests -c Release
+
+          - name: client-python
+            start_server: false
+            python: true
+            run: |
+              cd clients/python
+              python -m pip install --upgrade pip
+              python -m pip install --group dev -e .
+              LWNRDB_JAR="$GITHUB_WORKSPACE/target/lwnrdb.jar" python -m pytest tests/it -m it
+
           - name: metadata-limits
             start_server: false
             run: |
@@ -209,6 +449,17 @@ jobs:
             run: |
               python3 test_utils/test_storage_consistency.py
 
+          - name: power-loss
+            start_server: false
+            run: |
+              python3 test_utils/test_power_loss.py --seeds regression --mode all --budget 720
+
+          - name: disk-full
+            start_server: false
+            run: |
+              docker build -q -t lwnrdb-disk-full -f test_utils/disk_full/Dockerfile .
+              python3 test_utils/test_disk_full.py
+
           - name: fuzz
             start_server: false
             run: |
@@ -219,6 +470,7 @@ jobs:
             start_server: false
             run: |
               python3 -m unittest discover -s test_utils/bench -p "test_*.py"
+              python3 -m unittest discover -s test_utils/tools -p "test_*.py"
 
           - name: cache-warmup-bench
             start_server: true
@@ -230,21 +482,39 @@ jobs:
               python3 test_utils/test_cache_warmup_bench.py
     steps:
       - uses: actions/checkout@v7
-      - name: Download native binary
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+      - uses: actions/setup-node@v7
+        if: ${{ matrix.node }}
+        with:
+          node-version: '24'
+      - uses: actions/setup-dotnet@v6
+        if: ${{ matrix.dotnet }}
+        with:
+          dotnet-version: |
+            10.0.x
+            11.0.x
+      - uses: actions/setup-python@v6
+        if: ${{ matrix.python }}
+        with:
+          python-version: '3.13'
+      - name: Download the jar and the native executable
         uses: actions/download-artifact@v8
         with:
-          name: lwnrdb-native
+          pattern: lwnrdb-*
+          merge-multiple: true
           path: target
-      - name: Restore executable bit
-        # upload/download-artifact does not preserve the exec bit.
+      - name: Restore the executable bit
         run: chmod +x "$LWNRDB_SERVER_BIN"
       - name: Set admin credentials for integration tests
         run: echo "defaultAdminPassword=Tst-Admin-9xQ2mV" >> lwnrdb.cfg
       - name: Start server
         if: ${{ matrix.start_server }}
         run: |
-          sed -i "s/^maxMemory=.*/maxMemory=${{ matrix.max_memory }}/" lwnrdb.cfg
-          # Native images honor -Xmx as a runtime arg.
+          echo "maxMemory=${{ matrix.max_memory }}" >> lwnrdb.cfg
           "$LWNRDB_SERVER_BIN" -Xmx${{ matrix.xmx }} > server.log 2>&1 &
           echo $! > server.pid
           for _ in $(seq 1 150); do
@@ -260,16 +530,6 @@ jobs:
         if: ${{ always() && matrix.start_server }}
         run: pkill -f "$LWNRDB_SERVER_BIN" || true
 
-  # ---------------------------------------------------------------------------
-  # test262 conformance. Its own job rather than an integration matrix row: the
-  # matrix legs only download the native binary, while the worker JVM needs both
-  # target/classes and target/test-classes. It runs on the same JDK the native
-  # image is built from, because the engine resolves \p{...} against that JDK's
-  # Unicode data - a different JDK here would measure a different engine. Runs
-  # outside mvn verify's critical
-  # path because a conformance run must survive tests that hang or blow the JVM
-  # stack. The corpus is fetched on demand and cached, never committed.
-  # ---------------------------------------------------------------------------
   test262:
     name: test262 Conformance (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
@@ -279,7 +539,6 @@ jobs:
         shard: [1, 2, 3, 4]
     permissions:
       contents: read
-      actions: read
     steps:
       - uses: actions/checkout@v7
       - uses: graalvm/setup-graalvm@v1
@@ -300,25 +559,9 @@ jobs:
       - name: Driver self-test
         run: python3 test_utils/test262/test262.py --self-test
       - name: Run conformance
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          setsid python3 test_utils/test262/test262.py --gate baseline --require-corpus --timeout 20 \
-            --shard "${{ matrix.shard }}/4" &
-          conformance=$!
-          while kill -0 "$conformance" 2>/dev/null; do
-            failed=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
-              --jq '.jobs[] | select(.conclusion == "failure" and (.name | startswith("test262") | not) and .name != "Verify") | .name' \
-              2>/dev/null | head -n 1 || true)
-            if [ -n "$failed" ]; then
-              echo "::error::Stopping test262 Conformance because $failed failed"
-              kill -TERM -- "-$conformance" 2>/dev/null || true
-              wait "$conformance" 2>/dev/null || true
-              exit 1
-            fi
-            sleep 30
-          done
-          wait "$conformance"
+          python3 test_utils/test262/test262.py --gate baseline --require-corpus --timeout 20 \
+            --shard "${{ matrix.shard }}/4"
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v7
@@ -329,15 +572,23 @@ jobs:
 
   verify:
     name: Verify
-    needs: [build, integration, test262]
+    needs: [package, unit-tests, unit-tests-serial, coverage, static-spotbugs, static-style, java-client,
+      typescript-client, python-client, dotnet-client, integration, test262]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "build=${{ needs.build.result }} integration=${{ needs.integration.result }} test262=${{ needs.test262.result }}"
-          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ] || [ "${{ needs.test262.result }}" != "success" ]; then
-            echo "::error::one or more jobs failed"
-            exit 1
-          fi
-          echo "All jobs succeeded."
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          results = {job: outcome["result"] for job, outcome in json.load(sys.stdin).items()}
+          for job, result in sorted(results.items()):
+              print(f"{job}={result}")
+          failed = [job for job, result in results.items() if result != "success"]
+          if failed:
+              print("::error::jobs did not succeed: " + ", ".join(sorted(failed)))
+              sys.exit(1)
+          print("All jobs succeeded.")
+          '

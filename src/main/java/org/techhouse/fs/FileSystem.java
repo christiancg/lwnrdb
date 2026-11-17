@@ -9,9 +9,11 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongFunction;
+import java.util.function.LongUnaryOperator;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -27,13 +29,14 @@ public class FileSystem {
     private final Configuration configuration = Configuration.getInstance();
     private final FilePaths paths = new FilePaths();
     private final IndexMarkers indexMarkers = new IndexMarkers(paths);
-    private final TombstoneStore tombstones = new TombstoneStore(paths);
     private final MetadataFiles metadataFiles = new MetadataFiles(paths);
+    private final IndexFiles indexFiles = new IndexFiles(paths);
     private final FolderQuarantine folderQuarantine = new FolderQuarantine(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
+    private final SnapshotFiles snapshotFiles = new SnapshotFiles(paths, pkIndexStore);
     private final WriteIntentJournal writeIntentJournal = new WriteIntentJournal(paths);
     private final PageVacuum pageVacuum = new PageVacuum(paths, pkIndexStore, writeIntentJournal);
     private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, pageVacuum);
@@ -41,7 +44,9 @@ public class FileSystem {
     private final WriteIntentRecovery writeIntentRecovery = new WriteIntentRecovery(paths, pkIndexStore,
             writeIntentJournal);
     private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
+    private final FormatStampFile formatStamp = new FormatStampFile(paths);
     private final WriteAheadLog writeAheadLog = new WriteAheadLog(paths);
+    private final TombstoneStore tombstones = new TombstoneStore(paths, writeAheadLog);
     private final WalCheckpoints walCheckpoints = new WalCheckpoints(paths, writeAheadLog);
 
     public void onVacuum(Consumer<VacuumedPage> listener) {
@@ -55,6 +60,7 @@ public class FileSystem {
     public void createBaseDbPath() {
         paths.useDbPath(configuration.getFilePath());
         final var directory = new File(paths.dbPath());
+        FileTreeDeleter.forgetWrittenLengthsUnder(directory);
         if (!directory.exists()) {
             try {
                 OwnerOnly.createDirectories(directory.toPath());
@@ -68,33 +74,24 @@ public class FileSystem {
         SyncedWrites.verifyFolderSync(new File(paths.dbPath()).toPath());
     }
 
+    public void installDurableShadow(Path shadowRoot) throws IOException {
+        SyncedWrites.useForcer(DurableShadow.install(Path.of(paths.dbPath()), shadowRoot));
+    }
+
     public void createAdminDatabase() throws IOException {
         createDatabaseFolder(Globals.ADMIN_DB_NAME);
         createAdminPagesFolder();
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        final var pagesDatabases = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        final var pagesCollections = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        final var pagesUsers = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_USERS_COLLECTION_NAME);
-        final var pagesCollectionUsage = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_COLLECTION_USAGE_NAME);
-        final var pagesTransactions = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        final var pagesTriggerRuns = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
+        final var adminCollections = List.of(Globals.ADMIN_DATABASES_COLLECTION_NAME,
+                Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
+                Globals.ADMIN_COLLECTION_USAGE_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME,
                 Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesDatabases);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollections);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesUsers);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollectionUsage);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesTransactions);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesTriggerRuns);
+        for (final var collName : adminCollections) {
+            createCollectionFile(Globals.ADMIN_DB_NAME, collName);
+        }
+        for (final var collName : adminCollections) {
+            createCollectionFile(Globals.ADMIN_PAGES_DB_NAME,
+                    AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME, collName));
+        }
     }
 
     private void createAdminPagesFolder() {
@@ -112,6 +109,7 @@ public class FileSystem {
     public boolean createDatabaseFolder(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
         if (!dbFolder.exists()) {
+            FileTreeDeleter.forgetWrittenLengthsUnder(dbFolder);
             return OwnerOnly.createDirectory(dbFolder.toPath());
         }
         return true;
@@ -129,6 +127,7 @@ public class FileSystem {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
+            FileTreeDeleter.forgetWrittenLengthsUnder(collectionFolder);
             if (OwnerOnly.createDirectory(collectionFolder.toPath())) {
                 return OwnerOnly.createNewOwnerOnlyFile(collectionFile.toPath());
             } else {
@@ -136,6 +135,7 @@ public class FileSystem {
             }
         } else {
             if (!collectionFile.exists()) {
+                PageLengths.forget(collectionFile);
                 return OwnerOnly.createNewOwnerOnlyFile(collectionFile.toPath());
             }
             return true;
@@ -155,8 +155,16 @@ public class FileSystem {
         return !Files.exists(folder.toPath(), LinkOption.NOFOLLOW_LINKS);
     }
 
+    public SnapshotFiles snapshotFiles() {
+        return snapshotFiles;
+    }
+
     public MetadataFiles metadataFiles() {
         return metadataFiles;
+    }
+
+    public IndexFiles indexFiles() {
+        return indexFiles;
     }
 
     public IndexMarkers indexMarkers() {
@@ -167,16 +175,12 @@ public class FileSystem {
         return folderQuarantine;
     }
 
-    public Path nodeIdFile() {
-        return nodeIdStore.file();
+    public NodeIdStore nodeIds() {
+        return nodeIdStore;
     }
 
-    public String readNodeId() throws IOException {
-        return nodeIdStore.read();
-    }
-
-    public void writeNodeId(String nodeId) throws IOException {
-        nodeIdStore.write(nodeId);
+    public FormatStampFile formatStamp() {
+        return formatStamp;
     }
 
     public TombstoneStore tombstones() {
@@ -334,9 +338,24 @@ public class FileSystem {
         return indexFile != null && (indexFile.exists() || FilePaths.logFileOf(indexFile).exists());
     }
 
-    public void appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
-            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors) throws IOException {
-        fieldIndexStore.appendIndexLog(dbName, collName, fieldName, typeLabel, changes, survivors);
+    public PendingFold appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors, boolean refused)
+            throws IOException {
+        return fieldIndexStore.appendIndexLog(dbName, collName, fieldName, typeLabel, changes, survivors,
+                refused ? Globals.REFUSED_INDEX_FOLD_DIVISOR : 1);
+    }
+
+    public PendingFold appendIndexLogOnly(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, IndexTypeReader foldSource) throws IOException {
+        return fieldIndexStore.appendIndexLogOnly(dbName, collName, fieldName, typeLabel, changes, foldSource);
+    }
+
+    public PendingFold.Outcome fold(PendingFold fold) throws IOException {
+        return fieldIndexStore.fold(fold);
+    }
+
+    public long indexTypeStamp(String dbName, String collName, String fieldName, String typeLabel) {
+        return fieldIndexStore.stampOf(dbName, collName, fieldName, typeLabel);
     }
 
     public boolean dropIndex(String dbName, String collName, String fieldName) {
@@ -371,7 +390,11 @@ public class FileSystem {
     }
 
     public long pageFileLength(String dbName, String collName, long page) {
-        return paths.collectionPage(dbName, collName, page).length();
+        return PageLengths.lengthOf(paths.collectionPage(dbName, collName, page));
+    }
+
+    public LongUnaryOperator pageFileLengthsOf(String dbName, String collName) {
+        return PageLengths.of(paths, dbName, collName);
     }
 
     public void healTornPageTails(String dbName, String collName) throws IOException {
@@ -403,16 +426,50 @@ public class FileSystem {
         return walCheckpoints.idle(idleMillis, maxLogs, collectionLocks);
     }
 
+    public void onCheckpointRequest(BooleanSupplier submit) {
+        WalCheckpointRequests.listenWith(submit);
+    }
+
+    public void checkpointRequestedWriteAheadLogs(CollectionTryLock collectionLocks) {
+        walCheckpoints.requested(collectionLocks);
+    }
+
     public void openWriteGroup(String dbName, String collName) throws IOException {
         writeAheadLog.openGroup(dbName, collName);
     }
 
+    public boolean reopenWriteGroupIfEnded(String dbName, String collName) throws IOException {
+        if (writeAheadLog.openGroupOf(dbName, collName) != null) {
+            return false;
+        }
+        writeAheadLog.openGroup(dbName, collName);
+        return true;
+    }
+
     public boolean forceWriteGroup(String dbName, String collName) throws IOException {
-        return writeAheadLog.forceGroup(dbName, collName);
+        final var deleteTombstones = tombstones.startGroupForce(dbName, collName);
+        return tombstones.forcedBeside(deleteTombstones, writeAheadLog.forceGroup(dbName, collName), dbName, collName);
+    }
+
+    public boolean forceGroupTombstones(String dbName, String collName) {
+        return tombstones.forcedBeside(tombstones.startGroupForce(dbName, collName), true, dbName, collName);
     }
 
     public boolean settleWriteGroup(String dbName, String collName) throws IOException {
-        return writeAheadLog.closeGroup(dbName, collName);
+        try {
+            return writeAheadLog.closeGroup(dbName, collName);
+        } finally {
+            DeferredApplies.flagIfUnapplied(paths, dbName, collName);
+        }
+    }
+
+    public boolean applyDeferredWrites(String dbName, String collName) throws IOException {
+        final var replayed = writeAheadLog.requireApplied(dbName, collName);
+        return writeIntentRecovery.recoverBehindAVacuum(dbName, collName) || replayed;
+    }
+
+    public void onDeferredApply(DeferredApplyListener listener) {
+        DeferredApplies.listenWith(listener);
     }
 
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
@@ -420,22 +477,13 @@ public class FileSystem {
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
             writeIntentRecovery.recoverPagesOf(dbName, collName);
         } else {
-            refuseStaleWriteIntents(dbName, collName);
+            PkIndexRebuild.refuseStaleWriteIntents(writeIntentRecovery, dbName, collName);
         }
         return PkIndexRebuild.plan(paths, pkIndexStore, dbName, collName, pageFileLengths(dbName, collName).keySet());
     }
 
     public void applyPkRebuild(String dbName, String collName, PkRebuild rebuild) throws IOException {
         PkIndexRebuild.apply(pkIndexStore, dbName, collName, rebuild);
-    }
-
-    private void refuseStaleWriteIntents(String dbName, String collName) throws IOException {
-        final var stale = writeIntentRecovery.replayableIntentsOf(dbName, collName);
-        if (!stale.isEmpty()) {
-            throw PkIndexRebuild.refused(dbName, collName, "write intent(s) " + stale + " were left by writes this"
-                    + " process could not clean up after, and a rebuild would freeze whatever half of each write the"
-                    + " pages hold. Restart the server, which recovers them");
-        }
     }
 
     public List<DbEntry> adoptOrphanedRecords(PkRowsSession session) throws IOException {
@@ -446,5 +494,4 @@ public class FileSystem {
     public long pageFileCount(String dbName, String collName) throws IOException {
         return documentPageStore.pageFileCount(dbName, collName);
     }
-
 }

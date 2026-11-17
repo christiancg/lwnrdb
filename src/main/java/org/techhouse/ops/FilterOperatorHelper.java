@@ -16,7 +16,7 @@ import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
-import org.techhouse.data.DbEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -38,6 +38,7 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.simplejs.ScriptCallable;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
+import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.JsonUtils;
 
 public class FilterOperatorHelper {
@@ -52,18 +53,25 @@ public class FilterOperatorHelper {
 
     public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineContext context) throws IOException {
+        return processOperator(operator, resultStream, dbName, collName, context, -1);
+    }
+
+    static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream, String dbName,
+            String collName, PipelineContext context, long sourceBound) throws IOException {
         resultStream = switch (operator.getType()) {
-            case CONJUNCTION ->
-                processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName, context);
-            case FIELD -> processFieldOperator((FieldOperator) operator, resultStream, dbName, collName, context);
-            case CUSTOM -> processCustomOperator((CustomOperator) operator, resultStream, dbName, collName, context);
+            case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName,
+                    collName, context, sourceBound);
+            case FIELD ->
+                processFieldOperator((FieldOperator) operator, resultStream, dbName, collName, context, sourceBound);
+            case CUSTOM ->
+                processCustomOperator((CustomOperator) operator, resultStream, dbName, collName, context, sourceBound);
             case SCRIPT -> processScriptOperator((ScriptOperator) operator, resultStream, dbName, collName, context);
         };
         return resultStream;
     }
 
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
-            Stream<JsonObject> resultStream, String dbName, String collName, PipelineContext context)
+            Stream<JsonObject> resultStream, String dbName, String collName, PipelineContext context, long sourceBound)
             throws IOException {
         if (OperatorPredicate.holdsRanking(operator)) {
             return RankedConjunction.filter(operator, resultStream, dbName, collName, context);
@@ -74,15 +82,15 @@ public class FilterOperatorHelper {
         }
         final var candidates = ConjunctionCandidates.of(operator, dbName, collName, context);
         if (candidates != null && !ScanPreference.tooBroad(candidates.size(), dbName, collName)) {
-            return context.watch(fetched(dbName, collName, candidates, context)).filter(test);
+            return context.watch(fetched(dbName, collName, candidates, sourceBound, context)).filter(test);
         }
         return context.source(null, dbName, collName).filter(test);
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,
-            String dbName, String collName, PipelineContext context) throws IOException {
+            String dbName, String collName, PipelineContext context, long sourceBound) throws IOException {
         final var tester = FieldPredicateFactory.getTester(operator, operator.getFieldOperatorType());
-        return internalBaseFiltering(tester, operator, resultStream, dbName, collName, context);
+        return internalBaseFiltering(tester, operator, resultStream, dbName, collName, context, sourceBound);
     }
 
     private static Stream<JsonObject> processScriptOperator(ScriptOperator operator, Stream<JsonObject> resultStream,
@@ -121,7 +129,7 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> processCustomOperator(CustomOperator operator, Stream<JsonObject> resultStream,
-            String dbName, String collName, PipelineContext context) throws IOException {
+            String dbName, String collName, PipelineContext context, long sourceBound) throws IOException {
         if (CustomTypeFactory.isRankingOperator(operator.getCustomOperatorName())) {
             return rankedRows(operator, resultStream, dbName, collName, context);
         }
@@ -133,16 +141,15 @@ public class FilterOperatorHelper {
         // Candidate ids from the geo pre-filter are unconfirmed; they are fetched and re-tested exactly below.
         final var candidateIds = GeoSpatialIndexHelper.candidateIds(operator, dbName, collName, context);
         if (candidateIds != null) {
-            return fetched(dbName, collName, candidateIds, context).filter(data -> tester.test(data, fieldName));
+            return fetched(dbName, collName, candidateIds, sourceBound, context)
+                    .filter(data -> tester.test(data, fieldName));
         }
         return context.source(null, dbName, collName).filter(data -> tester.test(data, fieldName));
     }
 
-    private static Stream<JsonObject> fetched(String dbName, String collName, Set<String> ids, PipelineContext context)
-            throws IOException {
-        final var entries = cache.getEntriesByIds(dbName, collName, ids);
-        context.scanned(entries.size());
-        return entries.stream().map(DbEntry::getData);
+    private static Stream<JsonObject> fetched(String dbName, String collName, Set<String> ids, long sourceBound,
+            PipelineContext context) throws IOException {
+        return LazyCandidates.fetched(dbName, collName, ids, sourceBound, context);
     }
 
     public static BiPredicate<JsonObject, String> getCustomTester(CustomOperator operator) {
@@ -151,8 +158,10 @@ public class FilterOperatorHelper {
         for (var entry : operator.getArgs().entrySet()) {
             args.put(entry.getKey(), entry.getValue());
         }
+        final var compiled = operator.getField() == null ? null : FieldPath.of(operator.getField());
         return (JsonObject toTest, String fieldName) -> {
-            final var element = JsonUtils.resolvePath(toTest, fieldName);
+            final var path = compiled == null ? FieldPath.of(fieldName) : compiled.reusedFor(fieldName);
+            final var element = path.resolve(toTest);
             if (element == null || !element.isJsonCustom()) {
                 return false;
             }
@@ -174,7 +183,7 @@ public class FilterOperatorHelper {
         final var candidateIds = VectorSimilarityIndexHelper.candidateIds(operator, dbName, collName, context);
         final Stream<JsonObject> candidates;
         if (candidateIds != null) {
-            candidates = fetched(dbName, collName, candidateIds, context);
+            candidates = fetched(dbName, collName, candidateIds, -1, context);
         } else {
             candidates = context.source(null, dbName, collName);
         }
@@ -193,9 +202,10 @@ public class FilterOperatorHelper {
             args.put(entry.getKey(), entry.getValue());
         }
         final var heap = new PriorityQueue<>(WORST_FIRST);
+        final var path = FieldPath.of(fieldName);
         try (var scored = candidates) {
             scored.forEach(document -> {
-                final var score = scoreDocument(document, fieldName, operatorName, args);
+                final var score = scoreDocument(document, path, operatorName, args);
                 if (score == null) {
                     return;
                 }
@@ -211,9 +221,9 @@ public class FilterOperatorHelper {
         return heap.stream().sorted(WORST_FIRST.reversed()).map(ScoredDocument::document);
     }
 
-    private static Double scoreDocument(JsonObject document, String fieldName, String operatorName,
+    private static Double scoreDocument(JsonObject document, FieldPath path, String operatorName,
             Map<String, JsonBaseElement> args) {
-        final var element = JsonUtils.resolvePath(document, fieldName);
+        final var element = path.resolve(document);
         if (element == null || !element.isJsonCustom()) {
             return null;
         }
@@ -238,7 +248,7 @@ public class FilterOperatorHelper {
 
     private static Stream<JsonObject> internalBaseFiltering(BiPredicate<JsonObject, String> test,
             FieldOperator operator, Stream<JsonObject> resultStream, String dbName, String collName,
-            PipelineContext context) throws IOException {
+            PipelineContext context, long sourceBound) throws IOException {
         final var fieldName = operator.getField();
         if (resultStream != null) {
             return resultStream.filter(data -> test.test(data, fieldName));
@@ -250,7 +260,8 @@ public class FilterOperatorHelper {
         if (matchingValues != null && !ScanPreference.tooBroad(matchingValues.size(), dbName, collName)) {
             // Index hits are candidates only: an object/array element-match index stores just a SHA-256
             // fingerprint, and an entry can be stale, so re-test every fetched document against the operator.
-            return fetched(dbName, collName, matchingValues, context).filter(data -> test.test(data, fieldName));
+            return fetched(dbName, collName, matchingValues, sourceBound, context)
+                    .filter(data -> test.test(data, fieldName));
         }
         return context.source(null, dbName, collName).filter(data -> test.test(data, fieldName));
     }
@@ -272,8 +283,18 @@ public class FilterOperatorHelper {
         };
     }
 
-    private static boolean hitsAreUnconfirmedCandidates(FieldOperator operator) {
-        return !JsonUtils.isPrimaryKeyPath(operator.getField()) && usesHashIndex(operator);
+    static boolean hitsAreUnconfirmedCandidates(FieldOperator operator) {
+        return !JsonUtils.isPrimaryKeyPath(operator.getField())
+                && (usesHashIndex(operator) || usesCandidateKeyedIndex(operator));
+    }
+
+    private static boolean usesCandidateKeyedIndex(FieldOperator operator) {
+        final var value = operator.getValue();
+        if (value.isJsonArray()) {
+            final var arr = value.asJsonArray();
+            return !arr.isEmpty() && IndexKind.valueKeysCandidatesOnly(arr.get(0));
+        }
+        return IndexKind.valueKeysCandidatesOnly(value);
     }
 
     // Mirrors the dispatch in UserCache.doGetIdsFromIndex / getIdsFromInList: object operands and array

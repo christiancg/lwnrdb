@@ -11,7 +11,7 @@ class SchemaApplicatorValidator {
         this.nodeValidator = nodeValidator;
     }
 
-    void validateApplicators(JsonBaseElement instance, JsonObject obj, JsonSchema schema, String path,
+    void validateApplicators(JsonBaseElement instance, JsonObject obj, JsonSchema schema, SchemaPath path,
             List<String> errors) {
         final var allOf = obj.get(SchemaKeywords.ALL_OF);
         if (allOf != null) {
@@ -24,12 +24,12 @@ class SchemaApplicatorValidator {
         validateOneOf(instance, obj, schema, path, errors);
         final var not = obj.get(SchemaKeywords.NOT);
         if (not != null && nodeValidator.isValid(instance, not, schema)) {
-            errors.add(SchemaValidator.at(path) + ": value must not match the 'not' schema");
+            errors.add(path.describe() + ": value must not match the 'not' schema");
         }
         validateConditional(instance, obj, schema, path, errors);
     }
 
-    private void validateAnyOf(JsonBaseElement instance, JsonObject obj, JsonSchema schema, String path,
+    private void validateAnyOf(JsonBaseElement instance, JsonObject obj, JsonSchema schema, SchemaPath path,
             List<String> errors) {
         final var anyOf = obj.get(SchemaKeywords.ANY_OF);
         if (anyOf == null) {
@@ -40,10 +40,10 @@ class SchemaApplicatorValidator {
                 return;
             }
         }
-        errors.add(SchemaValidator.at(path) + ": value does not match any of the 'anyOf' schemas");
+        errors.add(path.describe() + ": value does not match any of the 'anyOf' schemas");
     }
 
-    private void validateOneOf(JsonBaseElement instance, JsonObject obj, JsonSchema schema, String path,
+    private void validateOneOf(JsonBaseElement instance, JsonObject obj, JsonSchema schema, SchemaPath path,
             List<String> errors) {
         final var oneOf = obj.get(SchemaKeywords.ONE_OF);
         if (oneOf == null) {
@@ -56,12 +56,12 @@ class SchemaApplicatorValidator {
             }
         }
         if (matches != 1) {
-            errors.add(SchemaValidator.at(path) + ": value must match exactly one of the 'oneOf' schemas (matched "
-                    + matches + ")");
+            errors.add(path.describe() + ": value must match exactly one of the 'oneOf' schemas (matched " + matches
+                    + ")");
         }
     }
 
-    private void validateConditional(JsonBaseElement instance, JsonObject obj, JsonSchema schema, String path,
+    private void validateConditional(JsonBaseElement instance, JsonObject obj, JsonSchema schema, SchemaPath path,
             List<String> errors) {
         final var ifSchema = obj.get(SchemaKeywords.IF);
         if (ifSchema == null) {

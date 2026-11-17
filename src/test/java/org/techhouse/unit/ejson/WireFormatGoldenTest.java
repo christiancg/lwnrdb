@@ -29,6 +29,7 @@ public class WireFormatGoldenTest {
             "org.techhouse.ops.resp.CancelScriptResponse", FINAL_PRIMITIVE,
             "org.techhouse.ops.resp.ResolveTriggerRunResponse", FINAL_PRIMITIVE,
             "org.techhouse.ops.resp.TestTriggerResponse", FINAL_PRIMITIVE,
+            "org.techhouse.ops.resp.ReadSnapshotResponse", FINAL_PRIMITIVE,
             "org.techhouse.ops.resp.CloseConnectionResponse", NO_ARG_CONSTRUCTOR,
             "org.techhouse.ops.resp.StopListenResponse", NO_ARG_CONSTRUCTOR);
 

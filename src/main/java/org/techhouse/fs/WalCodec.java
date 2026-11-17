@@ -29,7 +29,8 @@ final class WalCodec {
     private static final int RECORD_BYTES_HINT = 256;
 
     record Decoded(WalCheckpoint checkpoint, List<WalRecord> records, int framesSinceCheckpoint, long lastSeq,
-            long cleanLength, long groupBase, List<String> pendingIds, Map<Long, Rewrite> rewrites) {
+            long cleanLength, long groupBase, List<String> pendingIds, boolean pendingLogged,
+            Map<Long, Rewrite> rewrites) {
     }
 
     record Rewrite(long beginSeq, long lengthBefore, long lengthAfter) {
@@ -43,8 +44,9 @@ final class WalCodec {
     }
 
     static final class RecordBuffer extends OutputStream {
+        private static final int PAYLOAD_START = HEADER_BYTES + Integer.BYTES;
         private byte[] buf;
-        private int count = Integer.BYTES;
+        private int count = PAYLOAD_START;
         private int changes;
 
         RecordBuffer() {
@@ -52,7 +54,7 @@ final class WalCodec {
         }
 
         RecordBuffer(long expectedPayload) {
-            buf = new byte[(int) Math.min(Integer.MAX_VALUE - 8, Integer.BYTES + expectedPayload)];
+            buf = new byte[(int) Math.min(Integer.MAX_VALUE - 8, PAYLOAD_START + expectedPayload)];
         }
 
         static long changeBytes(long dataBytes) {
@@ -93,7 +95,7 @@ final class WalCodec {
 
         @Override
         public void close() {
-            count = Integer.BYTES;
+            count = PAYLOAD_START;
         }
 
         byte[] bytes() {
@@ -106,9 +108,10 @@ final class WalCodec {
             }
         }
 
-        byte[] header(long seq) {
-            ByteBuffer.wrap(buf, 0, Integer.BYTES).putInt(changes);
-            return WalCodec.header(WRITE, seq, buf, count);
+        void frame(long seq) {
+            ByteBuffer.wrap(buf, HEADER_BYTES, Integer.BYTES).putInt(changes);
+            System.arraycopy(WalCodec.header(WRITE, seq, buf, HEADER_BYTES, count - HEADER_BYTES), 0, buf, 0,
+                    HEADER_BYTES);
         }
     }
 
@@ -121,9 +124,8 @@ final class WalCodec {
                 buffer.change(change.target(), change.page(), change.offset(), change.length());
                 buffer.write(change.bytes(), 0, change.bytes().length);
             }
-            final var header = buffer.header(record.seq());
-            return ByteBuffer.allocate(header.length + buffer.size()).put(header).put(buffer.bytes(), 0, buffer.size())
-                    .array();
+            buffer.frame(record.seq());
+            return Arrays.copyOf(buffer.bytes(), buffer.size());
         }
     }
 
@@ -155,6 +157,16 @@ final class WalCodec {
         return frame(PENDING, seq, payload.array());
     }
 
+    static byte[] withPending(byte[] checkpointFrame, long pendingSeq, Collection<String> pending) {
+        if (pending.isEmpty()) {
+            return checkpointFrame;
+        }
+        final var pendingFrame = encodePending(pendingSeq, pending);
+        final var joined = Arrays.copyOf(checkpointFrame, checkpointFrame.length + pendingFrame.length);
+        System.arraycopy(pendingFrame, 0, joined, checkpointFrame.length, pendingFrame.length);
+        return joined;
+    }
+
     static byte[] encodeRewriteBegin(long seq, long page, long lengthBefore) {
         return frame(REWRITE_BEGIN, seq,
                 ByteBuffer.allocate(Long.BYTES * 2).putLong(page).putLong(lengthBefore).array());
@@ -170,20 +182,20 @@ final class WalCodec {
     }
 
     private static byte[] frame(byte kind, long seq, byte[] payload) {
-        return ByteBuffer.allocate(HEADER_BYTES + payload.length).put(header(kind, seq, payload, payload.length))
+        return ByteBuffer.allocate(HEADER_BYTES + payload.length).put(header(kind, seq, payload, 0, payload.length))
                 .put(payload).array();
     }
 
-    private static byte[] header(byte kind, long seq, byte[] payload, int length) {
+    private static byte[] header(byte kind, long seq, byte[] payload, int from, int length) {
         return ByteBuffer.allocate(HEADER_BYTES).put(MAGIC).put(kind).putLong(seq).putInt(length)
-                .putInt(crcOf(kind, seq, payload, length)).array();
+                .putInt(crcOf(kind, seq, payload, from, length)).array();
     }
 
-    private static int crcOf(byte kind, long seq, byte[] payload, int length) {
+    private static int crcOf(byte kind, long seq, byte[] payload, int from, int length) {
         final var crc = new CRC32();
         crc.update(kind);
         crc.update(ByteBuffer.allocate(Long.BYTES + Integer.BYTES).putLong(seq).putInt(length).array());
-        crc.update(payload, 0, length);
+        crc.update(payload, from, length);
         return (int) crc.getValue();
     }
 
@@ -196,6 +208,7 @@ final class WalCodec {
         var cleanLength = 0L;
         var groupBase = NO_GROUP_BASE;
         List<String> pendingIds = List.of();
+        var pendingLogged = false;
         final var rewrites = new HashMap<Long, Rewrite>();
         while (buffer.remaining() >= HEADER_BYTES) {
             final var start = buffer.position();
@@ -209,7 +222,7 @@ final class WalCodec {
             }
             final var payload = new byte[length];
             buffer.get(payload);
-            if (crcOf(kind, seq, payload, length) != crc) {
+            if (crcOf(kind, seq, payload, 0, length) != crc) {
                 break;
             }
             final boolean recognised;
@@ -221,6 +234,7 @@ final class WalCodec {
                         framesSinceCheckpoint = -1;
                         groupBase = NO_GROUP_BASE;
                         pendingIds = List.of();
+                        pendingLogged = false;
                         rewrites.clear();
                         yield true;
                     }
@@ -232,6 +246,7 @@ final class WalCodec {
                     }
                     case PENDING -> {
                         pendingIds = decodePending(payload);
+                        pendingLogged = true;
                         yield true;
                     }
                     case GROUP_BASE -> {
@@ -263,7 +278,7 @@ final class WalCodec {
             cleanLength = buffer.position();
         }
         return new Decoded(checkpoint, List.copyOf(records), framesSinceCheckpoint, lastSeq, cleanLength, groupBase,
-                pendingIds, Map.copyOf(rewrites));
+                pendingIds, pendingLogged, Map.copyOf(rewrites));
     }
 
     private static void endRewrite(Map<Long, Rewrite> rewrites, ByteBuffer frame) {

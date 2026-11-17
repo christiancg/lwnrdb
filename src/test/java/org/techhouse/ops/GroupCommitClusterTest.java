@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
@@ -33,6 +34,7 @@ import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
@@ -40,9 +42,11 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
 public class GroupCommitClusterTest {
     private static final String SUBJECT = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -126,7 +130,7 @@ public class GroupCommitClusterTest {
         assertEquals(ReplicationOp.UPSERT, payload.getValue().getOp());
         assertEquals(4, payload.getValue().getDocuments().size());
         assertEquals(4, payload.getValue().getVersions().size());
-        assertEquals(2L, fixture.walForces(), "the group base and one force for the whole group");
+        assertEquals(1L, fixture.walForces(), "the seed logged the group base, so one force for the whole group");
     }
 
     @Test
@@ -207,6 +211,64 @@ public class GroupCommitClusterTest {
         assertFalse(tombstones.containsKey("seed"), String.valueOf(tombstones));
         assertFalse(tombstones.containsKey("other"));
         assertEquals("v0", fixture.valueOf("seed"));
+    }
+
+    @Test
+    public void test_a_failed_tombstone_force_takes_the_group_back() throws Exception {
+        assertEquals(OperationStatus.OK, fixture.save("other", "v").getStatus());
+        assertTrue(
+                fixture.runQueued(GroupCommitFixture.times(2, number -> fixture.save("base" + number, "v"))).stream()
+                        .allMatch(response -> response.getStatus() == OperationStatus.OK),
+                "keeps the page from emptying");
+        clearInvocations(replicator);
+        recorder.failingFor(Globals.TOMBSTONE_FILE_NAME + ".idx");
+
+        final var responses = fixture.runQueued(List.of(() -> fixture.delete("seed"), () -> fixture.delete("other")));
+        recorder.failingFor(null);
+
+        final var deleting = ErrorCode.ERROR_DELETING.getCode();
+        assertEquals(List.of(deleting, deleting), codes(responses));
+        final var tombstones = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
+        assertFalse(tombstones.containsKey("seed"), String.valueOf(tombstones));
+        assertFalse(tombstones.containsKey("other"));
+        assertEquals("v0", fixture.valueOf("seed"));
+        assertEquals("v", fixture.valueOf("other"));
+        verify(replicator, never()).broadcast(any());
+    }
+
+    @Test
+    public void thePrefixTombstonesAreForcedBeforeTheyAreAcknowledged() throws Exception {
+        recorder.failingFor(Globals.TOMBSTONE_FILE_NAME + ".idx");
+
+        final var responses = fixture.runQueued(
+                List.of(() -> fixture.delete("seed"), () -> fixture.save("a", "v"), () -> fixture.save("b", "v")));
+        recorder.failingFor(null);
+
+        assertEquals(
+                List.of(ErrorCode.WRITE_LOGGED_NOT_APPLIED.getCode(), ErrorCode.ERROR_SAVING.getCode(),
+                        ErrorCode.ERROR_SAVING.getCode()),
+                codes(responses),
+                "the delete's rewrite ended its group, so the delete is durable but its tombstone was never forced");
+        assertNull(fixture.valueOf("seed"), "the durable delete stays applied");
+        assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("seed"),
+                "a durable delete keeps its tombstone");
+        final var payload = ArgumentCaptor.forClass(ReplicationPayload.class);
+        verify(replicator).broadcast(payload.capture());
+        assertEquals(ReplicationOp.DELETE, payload.getValue().getOp(), "the durable delete is replicated");
+        assertEquals(List.of("seed"), payload.getValue().getIds());
+        assertEquals(OperationStatus.OK, fixture.save("after", "v").getStatus(), "the collection keeps working");
+    }
+
+    @Test
+    public void aThrowAfterTheSettleAnswersAnUnknownOutcome() throws Exception {
+        when(replicator.broadcast(any())).thenThrow(new AssertionError("replication threw an Error"));
+
+        final var responses = fixture.runQueued(GroupCommitFixture.times(2, number -> fixture.save("u" + number, "v")));
+
+        final var unknown = ErrorCode.WRITE_LOGGED_NOT_APPLIED.getCode();
+        assertEquals(List.of(unknown, unknown), codes(responses), "settled locally, replication outcome unknown");
+        assertEquals("v", fixture.valueOf("u0"));
+        assertEquals("v", fixture.valueOf("u1"));
     }
 
     @Test

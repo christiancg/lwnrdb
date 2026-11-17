@@ -55,6 +55,7 @@ COPY --from=build /tmp/libz.so.1 /usr/lib/libz.so.1
 COPY --from=build --chown=nonroot:nonroot /out/app /app
 COPY --chown=nonroot:nonroot lwnrdb.cfg /app/
 COPY --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY --chmod=755 healthcheck.sh /app/healthcheck.sh
 
 WORKDIR /app
 
@@ -65,5 +66,7 @@ VOLUME /app/logs
 
 EXPOSE ${PORT}
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 CMD ["/busybox/sh", "/app/healthcheck.sh"]
+
 ENTRYPOINT ["/busybox/sh", "/app/docker-entrypoint.sh"]
-CMD ["/app/lwnrdb"]
+CMD ["/app/lwnrdb", "-XX:MaximumHeapSizePercent=70", "-Djdk.nio.maxCachedBufferSize=262144"]

@@ -1,5 +1,6 @@
 package org.techhouse.fs;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
@@ -72,23 +73,19 @@ final class DocumentPageStore {
             return new HashMap<>();
         }
         final var result = new HashMap<String, DbEntry>();
-        final var bytes = FileLocks.readAllBytesLocked(collectionFile);
-        var start = 0;
-        while (start < bytes.length) {
-            final var end = FileLocks.lineEnd(bytes, start);
-            if (!PageHoles.isSkippable(bytes, start, end)) {
-                try {
-                    final var entry = DbEntry.fromBytes(dbName, collectionName, bytes, start, end);
-                    entry.setPage(page);
-                    result.put(entry.get_id(), entry);
-                } catch (Exception e) {
-                    // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
-                    // line here would invalidate every later entry's recorded position.
-                    logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
-                }
+        final var chunks = FileLocks.readChunksLocked(collectionFile, ChunkedLines.CHUNK_BYTES);
+        ChunkedLines.forEachLine(chunks, (bytes, start, end) -> {
+            if (PageHoles.isSkippable(bytes, start, end)) {
+                return;
             }
-            start = FileLocks.nextLineStart(bytes, end);
-        }
+            try {
+                final var entry = DbEntry.fromBytes(dbName, collectionName, bytes, start, end);
+                entry.setPage(page);
+                result.put(entry.get_id(), entry);
+            } catch (Exception e) {
+                logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
+            }
+        });
         return result;
     }
 
@@ -146,6 +143,28 @@ final class DocumentPageStore {
         try (var pathStream = Files.list(collectionFolder)) {
             return pathStream.filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).count();
         }
+    }
+
+    static byte[] retiredLineOf(File page, RetiredCopies.RetiredCopy copy) throws IOException {
+        final var line = new byte[Math.toIntExact(copy.length())];
+        try (var reader = new RandomAccessFile(page, Globals.R_PERMISSIONS)) {
+            reader.seek(copy.offset());
+            reader.readFully(line);
+        }
+        final var storedId = PageLines.edgeIdOf(line, 0, recordEnd(line));
+        if (!copy.id().equals(storedId)) {
+            throw new IOException("The copy of '" + copy.id() + "' at " + page.getName() + ":" + copy.offset()
+                    + " holds '" + storedId + "'");
+        }
+        return line;
+    }
+
+    private static int recordEnd(byte[] line) {
+        var end = line.length;
+        while (end > 0 && (line[end - 1] == '\n' || line[end - 1] == '\r')) {
+            end--;
+        }
+        return end;
     }
 
     DbEntry readEntryFromOpenFile(RandomAccessFile reader, PkIndexEntry pkIndexEntry) throws IOException {

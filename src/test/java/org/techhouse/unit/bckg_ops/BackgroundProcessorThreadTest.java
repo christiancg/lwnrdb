@@ -2,7 +2,9 @@ package org.techhouse.unit.bckg_ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundLanes;
@@ -18,6 +20,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.unit.ops.index.DueFoldFixture;
 
 public class BackgroundProcessorThreadTest {
     private static final long BUSY_WINDOW_MS = 400L;
@@ -71,6 +74,29 @@ public class BackgroundProcessorThreadTest {
         assertTrue(thread.isAlive());
 
         thread.interrupt();
+    }
+
+    @Test
+    public void test_the_idle_branch_runs_due_index_folds() throws Exception {
+        TestUtils.standardInitialSetup();
+        TestUtils.createTestDatabaseAndCollection();
+        final var worker = new Thread(new BackgroundProcessorThread(new BackgroundLanes(1), 0, new AtomicInteger(),
+                new AtomicInteger(), new AtomicInteger(1), new IdleSignal()));
+        try {
+            new DueFoldFixture().markDue(List.of("tag"));
+            worker.start();
+            final var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (DueFoldFixture.logOf("tag").exists() && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+
+            assertFalse(DueFoldFixture.logOf("tag").exists(), "an idle worker folds a quiet index's log");
+        } finally {
+            worker.interrupt();
+            worker.join(5000);
+            TestUtils.releaseAllLocks();
+            TestUtils.standardTearDown();
+        }
     }
 
     private static DbEntry deferredEntry() {

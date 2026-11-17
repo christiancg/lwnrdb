@@ -165,7 +165,10 @@ public class WalCodecTest {
 
         assertEquals(List.of("a", "ü-id"), kept.pendingIds());
         assertEquals(1, kept.framesSinceCheckpoint(), "pending ids are not a record");
+        assertTrue(kept.pendingLogged(), "a log holding only a PENDING frame still has something to drop");
         assertEquals(List.of(), cleared.pendingIds());
+        assertFalse(cleared.pendingLogged());
+        assertFalse(WalCodec.decodeAll(log(WalCodec.encode(checkpoint()))).pendingLogged());
     }
 
     @Test

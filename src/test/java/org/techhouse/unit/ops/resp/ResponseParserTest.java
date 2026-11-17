@@ -16,6 +16,7 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
@@ -23,6 +24,7 @@ import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.ops.resp.SaveResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 
 public class ResponseParserTest {
@@ -74,6 +76,21 @@ public class ResponseParserTest {
     public void test_parses_delete_response() {
         final var response = assertInstanceOf(DeleteResponse.class, roundTrip(new DeleteResponse("deleted")));
         assertEquals(OperationType.DELETE, response.getType());
+    }
+
+    @Test
+    public void test_parses_a_conditional_save_response_with_its_count() {
+        final var response = assertInstanceOf(SaveWhereResponse.class, roundTrip(new SaveWhereResponse(12L)));
+        assertEquals(12L, response.getUpdatedCount());
+        assertEquals("Updated 12 document(s)", response.getMessage());
+        assertEquals(OperationType.SAVE, response.getType());
+    }
+
+    @Test
+    public void test_parses_a_conditional_delete_response_with_its_count() {
+        final var response = assertInstanceOf(DeleteManyResponse.class, roundTrip(new DeleteManyResponse(42L)));
+        assertEquals(42L, response.getDeletedCount());
+        assertEquals("Deleted 42 document(s)", response.getMessage());
     }
 
     @Test

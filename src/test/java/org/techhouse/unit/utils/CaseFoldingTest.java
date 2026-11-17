@@ -3,6 +3,7 @@ package org.techhouse.unit.utils;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
+import java.util.Random;
 import org.junit.jupiter.api.Test;
 import org.techhouse.utils.CaseFolding;
 
@@ -14,6 +15,10 @@ public class CaseFoldingTest {
     private static final List<String> FIRST_SET = List.of(EMOJI, FULLWIDTH_A, "aa" + FULLWIDTH_A, LONE_HIGH + EMOJI);
     private static final List<String> SECOND_SET = List.of(EMOJI + "a", LONE_HIGH + EMOJI, "b" + LONE_HIGH + LONE_HIGH,
             FULLWIDTH_A + "a" + EMOJI);
+    private static final int RANDOM_PAIRS = 20_000;
+    private static final List<String> ALPHABET = List.of("a", "A", "b", "B", "z", "Z", "0", "9", "-", "_", "é", "É",
+            "ÿ", "Ÿ", "σ", "ς", "Σ", "ß", "İ", "ı", "i", "I", "ſ", "s", "S", "K", "k", "K", EMOJI, "𐐀", "𐐨",
+            FULLWIDTH_A, LONE_HIGH, LONE_LOW);
 
     private static void assertTransitive(List<String> values) {
         for (final var a : values) {
@@ -96,5 +101,56 @@ public class CaseFoldingTest {
         }
         assertEquals(CaseFolding.foldKey("MiXeD"), CaseFolding.foldKey("mIxEd"));
         assertEquals("", CaseFolding.foldKey(""));
+    }
+
+    @Test
+    public void test_compare_agrees_with_the_folding_reference_on_random_strings() {
+        final var random = new Random(20261116L);
+        for (var pair = 0; pair < RANDOM_PAIRS; pair++) {
+            final var left = randomText(random);
+            final var right = random.nextBoolean()
+                    ? left.substring(0, random.nextInt(left.length() + 1)) + randomText(random)
+                    : randomText(random);
+            assertEquals(Integer.signum(referenceCompare(left, right)),
+                    Integer.signum(CaseFolding.compare(left, right)), left + " vs " + right);
+        }
+    }
+
+    @Test
+    public void test_shared_prefixes_compare_by_the_first_differing_fold() {
+        assertTrue(CaseFolding.compare("cat-00012", "cat-00013") < 0);
+        assertTrue(CaseFolding.compare("CAT-0001b", "cat-0001A") > 0);
+        assertEquals(0, CaseFolding.compare("prefixK", "prefixk"));
+        assertEquals(0, CaseFolding.compare("prefix" + EMOJI + "A", "prefix" + EMOJI + "a"));
+        assertTrue(CaseFolding.compare("prefix" + LONE_HIGH + "a", "prefix" + LONE_HIGH + "B") < 0);
+    }
+
+    private static String randomText(Random random) {
+        final var builder = new StringBuilder();
+        final var length = random.nextInt(9);
+        for (var i = 0; i < length; i++) {
+            builder.append(ALPHABET.get(random.nextInt(ALPHABET.size())));
+        }
+        return builder.toString();
+    }
+
+    private static int referenceCompare(String left, String right) {
+        var i = 0;
+        var j = 0;
+        while (i < left.length() && j < right.length()) {
+            final var leftCodePoint = left.codePointAt(i);
+            final var rightCodePoint = right.codePointAt(j);
+            final var diff = Integer.compare(referenceFold(leftCodePoint), referenceFold(rightCodePoint));
+            if (diff != 0) {
+                return diff;
+            }
+            i += Character.charCount(leftCodePoint);
+            j += Character.charCount(rightCodePoint);
+        }
+        return Boolean.compare(i < left.length(), j < right.length());
+    }
+
+    private static int referenceFold(int codePoint) {
+        return Character.toLowerCase(Character.toUpperCase(codePoint));
     }
 }

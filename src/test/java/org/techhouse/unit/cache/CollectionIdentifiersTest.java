@@ -75,14 +75,37 @@ public class CollectionIdentifiersTest {
     }
 
     @Test
-    public void past_the_cap_canonical_names_are_the_request_strings() {
-        for (var i = 0; i < PAST_THE_CAP; i++) {
+    public void past_the_cap_the_memo_starts_over_and_keeps_canonicalising() {
+        final var early = Cache.getCollectionIdentifier(CAP_DB, "c0");
+        for (var i = 1; i < PAST_THE_CAP; i++) {
             Cache.getCollectionIdentifier(CAP_DB, "c" + i);
         }
         final var coll = new String("late".toCharArray());
 
-        assertSame(coll, Cache.canonicalNames(CAP_DB, coll).collName());
-        assertEquals(concatenated(CAP_DB, "late"), Cache.canonicalNames(CAP_DB, "late").identifier());
+        final var first = Cache.canonicalNames(CAP_DB, coll);
+        final var again = Cache.canonicalNames(CAP_DB, new String("late".toCharArray()));
+
+        assertSame(coll, again.collName(), "a name first seen after the memo filled is still canonicalised");
+        assertSame(first.identifier(), again.identifier());
+        assertNotSame(early, Cache.getCollectionIdentifier(CAP_DB, "c0"),
+                "a name remembered before the memo filled ages out with that generation");
+        assertEquals(early, Cache.getCollectionIdentifier(CAP_DB, "c0"));
+    }
+
+    @Test
+    public void a_dead_name_left_by_a_late_lookup_ages_out_instead_of_filling_the_memo_for_good() {
+        for (var round = 0; round < 3; round++) {
+            for (var i = 0; i < PAST_THE_CAP; i++) {
+                final var dropped = "dead" + round + "_" + i;
+                Cache.getCollectionIdentifier(CAP_DB, dropped);
+                cache.evictCollection(CAP_DB, dropped);
+                Cache.getCollectionIdentifier(CAP_DB, dropped);
+            }
+        }
+        final var live = new String("live".toCharArray());
+        Cache.canonicalNames(CAP_DB, live);
+
+        assertSame(live, Cache.canonicalNames(CAP_DB, new String("live".toCharArray())).collName());
     }
 
     @Test
@@ -116,14 +139,14 @@ public class CollectionIdentifiersTest {
     }
 
     @Test
-    public void past_the_cap_identifiers_are_still_correct_and_eviction_makes_room_again() {
+    public void past_the_cap_identifiers_are_still_correct_and_the_latest_ones_are_remembered() {
         String last = null;
         for (var i = 0; i < PAST_THE_CAP; i++) {
             last = Cache.getCollectionIdentifier(CAP_DB, "c" + i);
             assertEquals(concatenated(CAP_DB, "c" + i), last);
         }
 
-        assertNotSame(last, Cache.getCollectionIdentifier(CAP_DB, "c" + (PAST_THE_CAP - 1)));
+        assertSame(last, Cache.getCollectionIdentifier(CAP_DB, "c" + (PAST_THE_CAP - 1)));
 
         cache.evictDatabase(CAP_DB);
         final var room = Cache.getCollectionIdentifier(CAP_DB, "fresh");

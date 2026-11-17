@@ -11,7 +11,8 @@ final class FileTreeDeleter {
     }
 
     static boolean delete(File root) {
-        PageTails.forgetUnder(root);
+        FieldIndexLog.forgetFilesUnder(root);
+        PageLengths.forgetUnder(root);
         for (var sweep = 0; sweep < SWEEPS; sweep++) {
             if (sweep(root)) {
                 WriteIntentJournal.forgetUnder(root);
@@ -25,6 +26,13 @@ final class FileTreeDeleter {
             }
         }
         return false;
+    }
+
+    static void forgetWrittenLengthsUnder(File folder) {
+        PageLengths.forgetUnder(folder);
+        PkIndexStore.forgetUnder(folder);
+        WriteAheadLog.forgetUnder(folder);
+        FieldIndexLog.forgetFilesUnder(folder);
     }
 
     private static boolean sweep(File file) {

@@ -43,6 +43,8 @@ def _parse(argv: list) -> argparse.Namespace:
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--ops-scale", type=float, default=1.0)
     parser.add_argument("--warmup", type=float, default=0.1)
+    parser.add_argument("--bulk-warmup", type=float, default=0.5,
+                        help="share of the bulk batches loaded untimed before the timed ones")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--durability", choices=DURABILITIES, default="relaxed")
     parser.add_argument("--phases", default="", help="comma-separated phases to run; bulk_insert always runs")
@@ -61,7 +63,8 @@ def main(argv: list) -> int:
     args = _parse(argv)
     settings = workload.Settings(docs=args.docs, batch=args.batch, payload=args.payload,
                                  concurrency=args.concurrency, ops_scale=args.ops_scale,
-                                 warmup=args.warmup, seed=args.seed, durability=args.durability)
+                                 warmup=args.warmup, seed=args.seed, durability=args.durability,
+                                 bulk_warmup=args.bulk_warmup)
     report = {"engine": args.engine, "started_at": datetime.datetime.now(datetime.UTC).isoformat(),
               "settings": dataclasses.asdict(settings), "phases": []}
     print(f"[{args.engine}] initializing", flush=True)
@@ -74,11 +77,10 @@ def main(argv: list) -> int:
                 continue
             print(f"{phase_cpu.START} {phase.name}", flush=True)
             time.sleep(START_SETTLE_S)
-            print(f"[{args.engine}] {phase.name:<22}", end="", flush=True)
             result = runner.run_phase(args.engine, phase, settings)
             result["ops_with_warmup"] = phase.ops + phase.warmup
             report["phases"].append(result)
-            print(_line(result), flush=True)
+            print(f"[{args.engine}] {phase.name:<22}{_line(result)}", flush=True)
             print(f"{phase_cpu.END} {phase.name} {result['ops_with_warmup']}", flush=True)
             status |= 1 if result["errors"] or result["invalid"] else 0
         report["final_count"] = runner.in_child(lambda: _count_all(args.engine, args.durability))

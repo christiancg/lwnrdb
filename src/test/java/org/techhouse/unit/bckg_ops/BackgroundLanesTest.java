@@ -147,6 +147,7 @@ public class BackgroundLanesTest {
     }
 
     private static final class Stuck extends Recorded {
+        private final java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
         private final java.util.concurrent.CountDownLatch release;
 
         private Stuck(String collName, List<String> seen, java.util.concurrent.CountDownLatch release) {
@@ -156,6 +157,7 @@ public class BackgroundLanesTest {
 
         @Override
         public String toString() {
+            entered.countDown();
             try {
                 if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
                     seen.add("never released");
@@ -200,11 +202,12 @@ public class BackgroundLanesTest {
         final var idleSignal = new org.techhouse.bckg_ops.IdleSignal();
         final var workerCount = new java.util.concurrent.atomic.AtomicInteger(2);
         final var parked = new java.util.concurrent.atomic.AtomicInteger();
-        lanes.add(new Stuck(stuckCollection, seen, release));
+        final var stuck = new Stuck(stuckCollection, seen, release);
+        lanes.add(stuck);
         final var owner = new Thread(new org.techhouse.bckg_ops.BackgroundProcessorThread(lanes, 0, inFlight, parked,
                 workerCount, idleSignal));
         owner.start();
-        Thread.sleep(20);
+        assertTrue(stuck.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the owner took the stuck event");
         lanes.add(new Recorded(collectionOnLane(lanes, 0), seen, "waiting"));
         final var helper = new Thread(new org.techhouse.bckg_ops.BackgroundProcessorThread(lanes, 1, inFlight, parked,
                 workerCount, idleSignal));
@@ -223,5 +226,89 @@ public class BackgroundLanesTest {
             owner.join(5_000);
             helper.join(5_000);
         }
+    }
+
+    private static void fillUntil(BackgroundLanes lanes, List<Event> batch, int maxBatch, int target,
+            long deadlineNanos) throws Exception {
+        final Method fill = BackgroundLanes.class.getDeclaredMethod("fillUntil", int.class, List.class, int.class,
+                int.class, long.class);
+        fill.setAccessible(true);
+        fill.invoke(lanes, 0, batch, maxBatch, target, deadlineNanos);
+    }
+
+    @Test
+    public void test_fill_until_returns_once_the_target_is_reached() throws Exception {
+        final var lanes = new BackgroundLanes(1);
+        final var batch = new ArrayList<Event>();
+        for (var i = 0; i < 3; i++) {
+            lanes.add(eventOn("orders"));
+        }
+        Thread.ofPlatform().start(() -> {
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            for (var i = 0; i < 5; i++) {
+                lanes.add(eventOn("orders"));
+            }
+        });
+        final var started = System.nanoTime();
+
+        fillUntil(lanes, batch, MAX_BATCH, 8, started + 5_000_000_000L);
+
+        assertEquals(8, batch.size());
+        assertTrue(System.nanoTime() - started < 4_000_000_000L, "it returns as soon as the target is met");
+    }
+
+    @Test
+    public void test_fill_until_returns_at_the_deadline_with_what_arrived() throws Exception {
+        final var lanes = new BackgroundLanes(1);
+        final var batch = new ArrayList<Event>();
+        lanes.add(eventOn("orders"));
+        final var deadline = System.nanoTime() + 30_000_000L;
+
+        fillUntil(lanes, batch, MAX_BATCH, 64, deadline);
+
+        assertEquals(1, batch.size());
+        assertTrue(System.nanoTime() >= deadline, "it waits until the deadline for company");
+        assertTrue(lanes.isEmpty());
+    }
+
+    @Test
+    public void test_fill_until_never_exceeds_the_max_batch() throws Exception {
+        final var lanes = new BackgroundLanes(1);
+        final var batch = new ArrayList<Event>();
+        for (var i = 0; i < 20; i++) {
+            lanes.add(eventOn("orders"));
+        }
+
+        fillUntil(lanes, batch, 10, 64, System.nanoTime() + 1_000_000_000L);
+
+        assertEquals(10, batch.size());
+        assertFalse(lanes.isEmpty(), "the rest stays queued for the next batch");
+    }
+
+    @Test
+    public void test_an_interrupt_during_fill_until_keeps_the_taken_events_and_the_flag() throws Exception {
+        final var lanes = new BackgroundLanes(1);
+        final var batch = new ArrayList<Event>(List.of(eventOn("orders")));
+        lanes.add(eventOn("orders"));
+        final var interrupted = new boolean[1];
+        final var worker = Thread.ofPlatform().start(() -> {
+            Thread.currentThread().interrupt();
+            try {
+                fillUntil(lanes, batch, MAX_BATCH, 64, System.nanoTime() + 5_000_000_000L);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            interrupted[0] = Thread.currentThread().isInterrupted();
+        });
+        worker.join(5_000);
+
+        assertEquals(1, batch.size(), "the event taken before the interrupt is kept for processing");
+        assertFalse(lanes.isEmpty(), "an event still queued stays queued");
+        assertTrue(interrupted[0], "the interrupt flag is restored");
     }
 }

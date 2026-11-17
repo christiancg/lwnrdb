@@ -19,9 +19,11 @@ public class ClientTest {
     public void test_getters_and_setters() {
         Client client = new Client("127.0.0.1");
         assertEquals("127.0.0.1", client.getAddress());
-        final var now = LocalDateTime.now();
-        client.setLastCommandTime(now);
-        assertEquals(now, client.getLastCommandTime());
+        assertFalse(client.hasCommanded());
+        final var now = System.nanoTime();
+        client.setLastCommandNanos(now);
+        assertEquals(now, client.getLastCommandNanos());
+        assertTrue(client.hasCommanded());
     }
 
     @Test

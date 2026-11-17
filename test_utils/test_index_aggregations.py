@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -11,6 +12,9 @@ from base_utils import Conn, check, check_code, check_status, section
 HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("INDEX_TEST_PORT", "8989"))
 DEADLINE_PORT = int(os.environ.get("INDEX_DEADLINE_TEST_PORT", "9449"))
+LARGE_ENTRY_PORT = int(os.environ.get("INDEX_LARGE_ENTRY_TEST_PORT", "9459"))
+LARGE_ENTRY_CROWD = int(os.environ.get("INDEX_TEST_LARGE_ENTRY_CROWD", "90000"))
+LARGE_ENTRY_MATCHING = int(os.environ.get("INDEX_TEST_LARGE_ENTRY_MATCHING", "10000"))
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = bu.PASSWORD
@@ -44,12 +48,17 @@ GEO_CLUSTER = int(os.environ.get("INDEX_TEST_GEO_CLUSTER", "50"))
 WIDE_AND = "idxagg_wide_and"
 CHUNKED_COUNT = "idxagg_chunked_count"
 CHUNKED_COUNT_DOCS = 3000
+NOT_IN_COLL = "idxagg_not_in"
+GROUP_BY_SCAN_ROWS = 4096
+NOT_IN_DOCS = 6000
 WIDE_AND_DOCS = int(os.environ.get("INDEX_TEST_WIDE_AND_DOCS", "20000"))
 WIDE_AND_CHILDREN = 2000
 COLLIDING_STRINGS = "idxagg_colliding_strings"
 COLLIDING_OBJECTS = "idxagg_colliding_objects"
 COLLIDING_BLOCKS = int(os.environ.get("INDEX_TEST_COLLIDING_BLOCKS", "15"))
 COLLIDING_BUDGET_S = float(os.environ.get("INDEX_TEST_COLLIDING_BUDGET_S", "3"))
+SELF_PAIRS = "idxagg_self_pairs"
+SELF_PAIR_DOCS = int(os.environ.get("INDEX_TEST_SELF_PAIR_DOCS", "20000"))
 GEO_CLUSTER_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -2141,7 +2150,8 @@ def limits_suite(c):
     refused = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
                       "object": {"_id": "vec-over", "embedding": over}})
     check("A vector past maxVectorDimensions is not a valid command",
-          refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid",
+          refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid"
+          and refused.get("errorCode") == "400-43",
           f"got={str(refused)[:200]}")
     check_status("It was never stored",
                  c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "vec-over"}),
@@ -2245,6 +2255,133 @@ def range_top_k_disagreements(c, coll, queries):
         if indexed != scanned:
             wrong.append((steps, indexed, scanned))
     return wrong
+
+
+def analyzed(c, coll, steps) -> dict:
+    return c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "aggregationSteps": steps,
+                   "analyze": True})
+
+
+def scanned_documents(r: dict):
+    return (r.get("analyzeResult") or {}).get("documentsScanned")
+
+
+def test_not_in_matches_scan(c):
+    section("NOT_IN and NOT_EQUALS: a selective complement reads only its rows, a broad one scans, both match the scan")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": NOT_IN_COLL})
+    bulk_load(c, NOT_IN_COLL, ({"_id": f"ni{i:05d}", "c": i % 100,
+                                "h": None if i % 37 == 0 else i % 100} for i in range(NOT_IN_DOCS)))
+    build_index(c, NOT_IN_COLL, "c", "h")
+    most = list(range(90))
+    selective = [bu.filter_step("c", "NOT_IN", most)]
+    expected_rows = NOT_IN_DOCS // 10
+    served = bu.wait_until(lambda: scanned_documents(analyzed(c, NOT_IN_COLL, selective)) == expected_rows, 20)
+    check(f"NOT_IN of 90 of 100 values reads only the {expected_rows} documents it returns", bool(served),
+          detail=str(analyzed(c, NOT_IN_COLL, selective).get("analyzeResult")))
+    broad = [bu.filter_step("c", "NOT_IN", [1, 2, 3])]
+    check(f"a broad NOT_IN reads the collection once instead of fetching {NOT_IN_DOCS - 180} ids",
+          scanned_documents(analyzed(c, NOT_IN_COLL, broad)) == NOT_IN_DOCS,
+          detail=str(analyzed(c, NOT_IN_COLL, broad).get("analyzeResult")))
+    queries = [
+        ("selective NOT_IN on a covered field", selective),
+        ("broad NOT_IN on a covered field", broad),
+        ("NOT_EQUALS on a covered field", [bu.filter_step("c", "NOT_EQUALS", 5)]),
+        ("NOT_IN of a value of another kind", [bu.filter_step("c", "NOT_IN", ["5"])]),
+        ("selective NOT_IN on a field holding nulls", [bu.filter_step("h", "NOT_IN", most)]),
+        ("NOT_EQUALS null on a field holding nulls", [bu.filter_step("h", "NOT_EQUALS", None)]),
+    ]
+    for label, steps in queries:
+        answer, scan = index_matches_scan(c, NOT_IN_COLL, steps)
+        check(f"{label} answers what the forced scan answers ({len(scan)} rows)", answer == scan,
+              detail=f"rows={len(answer)} vs {len(scan)}")
+        check(f"{label}: COUNT agrees", agg_count(c, NOT_IN_COLL, steps) == len(scan),
+              detail=f"count={agg_count(c, NOT_IN_COLL, steps)} vs {len(scan)}")
+    check("NOT_EQUALS 5 answers what NOT_IN [5] answers",
+          agg_ids(c, NOT_IN_COLL, [bu.filter_step("c", "NOT_EQUALS", 5)])
+          == agg_ids(c, NOT_IN_COLL, [bu.filter_step("c", "NOT_IN", [5])]))
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": NOT_IN_COLL})
+
+
+COMPLEMENT_LIMIT_COLL = "idxagg_complement_limit"
+COMPLEMENT_LIMIT_DOCS = 6000
+
+
+def complement_limit_doc(i: int) -> dict:
+    return {"_id": f"cl{i:05d}", "c": i % 100, "u": i, "h": None if i % 37 == 0 else i % 100,
+            "m": i % 10 if i % 2 == 0 else f"s{i % 10}"}
+
+
+def check_limited_subset(c, label, filter_steps, limit, skip=0):
+    every = agg_ids(c, COMPLEMENT_LIMIT_COLL, forced_scan(filter_steps))
+    tail = ([{"type": "SKIP", "skip": skip}] if skip else []) + [{"type": "LIMIT", "limit": limit}]
+    limited = agg_ids(c, COMPLEMENT_LIMIT_COLL, filter_steps + tail)
+    expected_rows = max(0, min(limit, len(every) - skip))
+    check(f"{label} + LIMIT {limit}: {expected_rows} distinct rows the scan also returns",
+          len(limited) == expected_rows and len(set(limited)) == len(limited) and set(limited) <= set(every),
+          detail=f"rows={len(limited)} distinct={len(set(limited))} of {len(every)}")
+    if skip == 0 and len(every) <= limit:
+        check(f"{label} + LIMIT {limit} is the scan's whole answer", limited == every,
+              detail=f"rows={len(limited)} vs {len(every)}")
+    return every
+
+
+def test_complement_limits_and_in_counts_match_scan(c):
+    section("NOT_EQUALS/NOT_IN + LIMIT and IN + COUNT answer what the scan answers, broad complements read only "
+            "their rows")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COMPLEMENT_LIMIT_COLL})
+    bulk_load(c, COMPLEMENT_LIMIT_COLL, (complement_limit_doc(i) for i in range(COMPLEMENT_LIMIT_DOCS)))
+    build_index(c, COMPLEMENT_LIMIT_COLL, "c", "u", "h", "m")
+    broad = [bu.filter_step("c", "NOT_EQUALS", 5)]
+    settled = bu.wait_until(
+        lambda: scanned_documents(analyzed(c, COMPLEMENT_LIMIT_COLL, broad + [{"type": "LIMIT", "limit": 10}])) <= 20,
+        20)
+    check("a broad NOT_EQUALS + LIMIT 10 stops the scan at its rows instead of building the complement",
+          bool(settled), detail=str(analyzed(c, COMPLEMENT_LIMIT_COLL,
+                                             broad + [{"type": "LIMIT", "limit": 10}]).get("analyzeResult")))
+    narrow = [bu.filter_step("u", "NOT_IN", list(range(COMPLEMENT_LIMIT_DOCS - 10)))]
+    narrow_scanned = scanned_documents(analyzed(c, COMPLEMENT_LIMIT_COLL, narrow + [{"type": "LIMIT", "limit": 50}]))
+    check("a narrow NOT_IN + LIMIT stays on the index and fetches only its 10 rows", narrow_scanned == 10,
+          detail=f"documentsScanned={narrow_scanned}")
+    limited_cases = [
+        ("NOT_EQUALS on a covered field", broad, 10, 0),
+        ("NOT_IN of three values", [bu.filter_step("c", "NOT_IN", [1, 2, 3])], 10, 0),
+        ("NOT_IN of three values after a SKIP", [bu.filter_step("c", "NOT_IN", [1, 2, 3])], 10, 25),
+        ("NOT_IN of ten unique values", [bu.filter_step("u", "NOT_IN", list(range(10)))], 10, 0),
+        ("NOT_IN of all but ten unique values", narrow, 50, 0),
+        ("NOT_IN with duplicate operands", [bu.filter_step("c", "NOT_IN", [1, 1, 2, 2, 1])], 10, 0),
+        ("NOT_IN with a null operand", [bu.filter_step("h", "NOT_IN", [1, None])], 10, 0),
+        ("NOT_EQUALS null on a field holding nulls", [bu.filter_step("h", "NOT_EQUALS", None)], 10, 0),
+        ("NOT_IN with an object operand", [bu.filter_step("c", "NOT_IN", [{"a": 1}])], 10, 0),
+        ("NOT_IN on a field with two index types", [bu.filter_step("m", "NOT_IN", [0, 2, 4])], 10, 0),
+        ("NOT_EQUALS a string on a field with two index types", [bu.filter_step("m", "NOT_EQUALS", "S1")], 10, 0),
+    ]
+    for label, steps, limit, skip in limited_cases:
+        every = check_limited_subset(c, label, steps, limit, skip)
+        check(f"{label}: COUNT agrees with the scan", agg_count(c, COMPLEMENT_LIMIT_COLL, steps) == len(every),
+              detail=f"count={agg_count(c, COMPLEMENT_LIMIT_COLL, steps)} vs {len(every)}")
+    in_cases = [
+        ("IN of sorted values", "c", [1, 2, 3]),
+        ("IN of unsorted values with duplicates", "c", [3, 1, 2, 1, 3]),
+        ("IN of values absent from the index", "c", [1000, -1, 0.5]),
+        ("IN of a value of another kind", "c", ["1"]),
+        ("IN mixing kinds", "c", [1, "1"]),
+        ("IN with a null operand", "h", [1, None]),
+        ("IN with an object operand", "c", [{"a": 1}]),
+        ("IN of case variants on a field with two index types", "m", ["S1", "s3", "s1"]),
+        ("IN of numbers on a field with two index types", "m", [0, 2, 9]),
+        ("IN of one hundred unique values", "u", list(range(0, 2000, 20))),
+    ]
+    for label, field, operands in in_cases:
+        steps = [bu.filter_step(field, "IN", operands)]
+        scan = len(agg_ids(c, COMPLEMENT_LIMIT_COLL, forced_scan(steps)))
+        counted = agg_count(c, COMPLEMENT_LIMIT_COLL, steps)
+        check(f"{label} + COUNT answers what the scan answers ({scan})", counted == scan,
+              detail=f"count={counted} vs {scan}")
+    counted = analyzed(c, COMPLEMENT_LIMIT_COLL, [bu.filter_step("u", "IN", list(range(10))), {"type": "COUNT"}])
+    check("IN of ten scalars + COUNT is answered from the index without reading a document",
+          scanned_documents(counted) == 0 and bu.count_of(counted) == 10,
+          detail=str(counted.get("analyzeResult")))
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": COMPLEMENT_LIMIT_COLL})
 
 
 def test_range_top_k_agrees_with_the_scan(c):
@@ -2377,8 +2514,9 @@ def check_colliding_groups(c: Conn, coll, values, label):
           f"{COLLIDING_BUDGET_S:.0f}s", built_in < COLLIDING_BUDGET_S)
     group_by = [{"type": "GROUP_BY", "fieldName": "k"}]
     agg(c, coll, [{"type": "SKIP", "skip": 0}, {"type": "COUNT"}])
-    if caching_disabled(c):
-        check(f"{label}: GROUP_BY stays on the scan while caching is disabled", not index_used(c, coll, group_by))
+    if caching_disabled(c) or len(values) >= GROUP_BY_SCAN_ROWS:
+        check(f"{label}: GROUP_BY over {len(values)} documents stays on the scan, cached or not",
+              not index_used(c, coll, group_by))
     else:
         check(f"{label}: GROUP_BY uses the index", index_used(c, coll, group_by))
     started = time.perf_counter()
@@ -2406,6 +2544,25 @@ def test_colliding_values_group_exactly_and_fast(c: Conn):
     check_colliding_groups(c, COLLIDING_OBJECTS, [{key: 1} for key in keys], "objects")
 
 
+def test_self_pair_documents_dedupe_fast(c: Conn):
+    section(f"DISTINCT and GROUP_BY over {SELF_PAIR_DOCS} self-pair and swapped-pair documents stay fast")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SELF_PAIRS})
+    half = SELF_PAIR_DOCS // 2
+    bulk_load(c, SELF_PAIRS, ({"_id": f"s{i:05d}", f"k{i}": f"k{i}", "v": {f"k{i}": f"k{i}"}} for i in range(half)))
+    bulk_load(c, SELF_PAIRS, ({"_id": f"w{i:05d}", f"a{i}": f"b{i}", "v": {f"b{i}": f"a{i}"}} for i in range(half)))
+    for label, steps in (("DISTINCT without a field", [{"type": "DISTINCT"}]),
+                         ("DISTINCT on an object field", [{"type": "DISTINCT", "fieldName": "v"}]),
+                         ("GROUP_BY on an object field", [{"type": "GROUP_BY", "fieldName": "v"}])):
+        started = time.perf_counter()
+        answer = agg(c, SELF_PAIRS, steps + [{"type": "COUNT"}])
+        elapsed = time.perf_counter() - started
+        check_status(f"{label} over self pairs (OK)", answer, "OK")
+        check(f"{label}: every document is its own row", bu.count_of(answer) == SELF_PAIR_DOCS,
+              detail=f"count={bu.count_of(answer)}")
+        check(f"{label} answered in {elapsed:.2f}s, under {COLLIDING_BUDGET_S:.0f}s", elapsed < COLLIDING_BUDGET_S)
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": SELF_PAIRS})
+
+
 def test_materialising_steps_obey_the_deadline():
     section("Index-built GROUP_BY and a NOR over 50k documents stop at aggregateTimeoutMs")
     bu.require_jar()
@@ -2429,6 +2586,48 @@ def test_materialising_steps_obey_the_deadline():
             c.send({"type": "DROP_DATABASE", "databaseName": DB})
     finally:
         bu.stop_server(proc, port=DEADLINE_PORT)
+
+
+def test_a_large_entry_range_top_k_is_sorted_once():
+    total = LARGE_ENTRY_CROWD + LARGE_ENTRY_MATCHING
+    section(f"FILTER range + indexed leg, SORT, LIMIT 20 through one {total}-id index entry completes quickly")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-idxagg-large-entry-")
+    log_path = os.path.join(work_dir, "server.log")
+    coll = "idxagg_large_entry"
+    bu.write_config(work_dir, LARGE_ENTRY_PORT, syncWrites=False)
+    proc = bu.start_server(work_dir, log_path, port=LARGE_ENTRY_PORT)
+    try:
+        with Conn(port=LARGE_ENTRY_PORT) as c:
+            check_status("authenticate", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+            c.send({"type": "CREATE_DATABASE", "databaseName": DB})
+            c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+            bulk_load(c, coll, ({"_id": f"a{i:07d}", "ts": 1, "cat": "crowd"} for i in range(LARGE_ENTRY_CROWD)))
+            bulk_load(c, coll, ({"_id": f"z{i:07d}", "ts": 1, "cat": "x"} for i in range(LARGE_ENTRY_MATCHING)))
+            build_index(c, coll, "ts", "cat")
+            bu.wait_until(lambda: documents_scanned(c, coll, large_entry_top_k()) == 20, timeout_s=30)
+            steps = large_entry_top_k()
+            expected = [f"z{i:07d}" for i in range(20)]
+            check("the top-K answers the first 20 matching ids", agg_ids(c, coll, steps) == expected)
+            check("the [SKIP 0] spelling answers the same rows", agg_ids(c, coll, forced_scan(steps)) == expected)
+            read = documents_scanned(c, coll, steps)
+            check(f"the walk fetches only the 20 rows it returns (read {read})", read == 20)
+            scan_time, index_time, _ = timed_scan_and_index(c, coll, steps, forced_scan(steps))
+            check("the walk sorts the large entry once, so it stays within 10x the forced scan plus 20 ms",
+                  index_time < 10 * scan_time + 0.02,
+                  detail=f"scan_best={scan_time * 1000:.2f}ms  indexed_best={index_time * 1000:.2f}ms")
+            c.send({"type": "DROP_DATABASE", "databaseName": DB})
+    finally:
+        bu.stop_server(proc, port=LARGE_ENTRY_PORT)
+        if bu.failure_count():
+            bu.dump_log(log_path)
+
+
+def large_entry_top_k() -> list:
+    return [{"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
+        {"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "ts", "value": 0},
+        {"fieldOperatorType": "EQUALS", "field": "cat", "value": "x"}]}},
+            {"type": "SORT", "fieldName": "ts", "ascending": True}, {"type": "LIMIT", "limit": 20}]
 
 
 MANY_LEFT = "idxagg_many_left"
@@ -2461,6 +2660,260 @@ def test_join_by_index_with_many_distinct_values(c: Conn):
     check(f"every local value with a remote match joined ({matched} of {MANY_VALUES})", matched >= MANY_VALUES * 0.9)
     for coll in (MANY_LEFT, MANY_RIGHT):
         c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+
+
+LAZY = "idxagg_lazy"
+LAZY_DOCS = int(os.environ.get("INDEX_TEST_LAZY_DOCS", "20000"))
+LAZY_CATEGORIES = 10
+LAZY_FIRST_CHUNK = 256
+
+
+def lazy_eq(field, value) -> dict:
+    return {"fieldOperatorType": "EQUALS", "field": field, "value": value}
+
+
+def lazy_and(*legs) -> dict:
+    return {"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": list(legs)}}
+
+
+def lazy_sort(ascending=True) -> dict:
+    return {"type": "SORT", "fieldName": "ts", "ascending": ascending}
+
+
+def lazy_ids(c, steps) -> list:
+    return [row.get("_id") for row in (agg(c, LAZY, steps).get("results") or [])]
+
+
+def lazy_window(skip, limit) -> list:
+    return ([{"type": "SKIP", "skip": skip}] if skip else []) + [{"type": "LIMIT", "limit": limit}]
+
+
+def setup_lazy_sources(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": LAZY})
+    bulk_load(c, LAZY, ({"_id": f"z{i:06d}", "cat": f"c{i % LAZY_CATEGORIES}", "region": f"r{i % 7}",
+                         "ts": (i * 7919) % LAZY_DOCS} for i in range(LAZY_DOCS)))
+    build_index(c, LAZY, "cat", "ts")
+    wait_for_background()
+
+
+def test_filter_map_limit_reads_one_chunk(c):
+    section("A source FILTER followed by row-wise steps and a LIMIT fetches one chunk of its candidates")
+    category = bu.filter_step("cat", "EQUALS", "c3")
+    matches = set(agg_ids(c, LAZY, forced_scan([category])))
+    twice = {"type": "MAP", "operators": [{"fieldName": "twice", "operator": {"type": "MULTIPLY",
+                                                                              "operands": ["ts", 2]}}]}
+    both = lazy_and(lazy_eq("cat", "c3"), lazy_eq("region", "r2"))
+    both_matches = set(agg_ids(c, LAZY, forced_scan([both])))
+    for label, steps, expected in (
+            ("FILTER, MAP, LIMIT 20", [category, twice, {"type": "LIMIT", "limit": 20}], matches),
+            ("FILTER AND(cat, unindexed region), LIMIT 20", [both, {"type": "LIMIT", "limit": 20}], both_matches),
+            ("FILTER cat, FILTER region, LIMIT 20",
+             [category, bu.filter_step("region", "EQUALS", "r2"), {"type": "LIMIT", "limit": 20}], both_matches),
+            ("FILTER AND, MAP, LIMIT 20", [both, twice, {"type": "LIMIT", "limit": 20}], both_matches)):
+        rows = agg(c, LAZY, steps).get("results") or []
+        ids = [row.get("_id") for row in rows]
+        check(f"{label} answers 20 distinct matching rows", len(set(ids)) == 20 and set(ids) <= expected,
+              detail=f"got {ids[:5]}")
+        read = documents_scanned(c, LAZY, steps)
+        check(f"{label} reads at most one chunk of the {len(matches)} candidates (read {read})",
+              read is not None and read <= LAZY_FIRST_CHUNK)
+
+
+def test_filter_other_field_sort_limit(c):
+    section("FILTER on one field + SORT on another indexed field + LIMIT walks the sort index in order")
+    shapes = (("cat", [bu.filter_step("cat", "EQUALS", "c3")]),
+              ("cat and region", [lazy_and(lazy_eq("cat", "c4"), lazy_eq("region", "r1"))]),
+              ("keyset cat and ts > half", [lazy_and(lazy_eq("cat", "c5"), {
+                  "fieldOperatorType": "GREATER_THAN", "field": "ts", "value": LAZY_DOCS // 2})]))
+    for label, source in shapes:
+        for ascending in (True, False):
+            for skip in (0, 40):
+                steps = source + [lazy_sort(ascending)] + lazy_window(skip, 20)
+                name = f"{label}, ascending={ascending}, skip={skip}"
+                indexed = lazy_ids(c, steps)
+                check(f"{name}: answers the scan's rows in the scan's order",
+                      len(indexed) == 20 and indexed == lazy_ids(c, forced_scan(steps)),
+                      detail=f"index={indexed[:4]}")
+                read = documents_scanned(c, LAZY, steps)
+                check(f"{name}: reads far fewer than the {LAZY_DOCS // LAZY_CATEGORIES} matches (read {read})",
+                      read is not None and read <= LAZY_DOCS // LAZY_CATEGORIES // 2)
+    exact = [bu.filter_step("cat", "EQUALS", "c3"), lazy_sort(False), {"type": "LIMIT", "limit": 20}]
+    read = documents_scanned(c, LAZY, exact)
+    check(f"an indexed equality + SORT desc + LIMIT 20 fetches only its 20 rows (read {read})", read == 20)
+
+
+def test_deep_skip_reads_page_only(c):
+    section("Deep pagination over an index drops the skipped ids before fetching")
+    deep = [lazy_sort(True)] + lazy_window(LAZY_DOCS // 2, 20)
+    check("SORT ts, SKIP half, LIMIT 20 answers what the scan answers",
+          lazy_ids(c, deep) == lazy_ids(c, forced_scan(deep)))
+    read = documents_scanned(c, LAZY, deep)
+    check(f"SORT ts, SKIP half, LIMIT 20 reads only its 20 rows (read {read})", read == 20)
+    category = bu.filter_step("cat", "EQUALS", "c3")
+    matches = set(agg_ids(c, LAZY, forced_scan([category])))
+    head_steps = [category, {"type": "LIMIT", "limit": 2000}]
+    window = [category] + lazy_window(1980, 20)
+    head = lazy_ids(c, head_steps)
+    rows = lazy_ids(c, window)
+    check("FILTER cat, SKIP 1980, LIMIT 20 answers 20 distinct matching rows",
+          len(set(rows)) == 20 and set(rows) <= matches, detail=f"got {rows[:4]}")
+    check("FILTER cat, SKIP 1980, LIMIT 20 answers the same window as the head of its walk",
+          rows == head[1980:2000])
+    read = documents_scanned(c, LAZY, window)
+    check(f"FILTER cat, SKIP 1980, LIMIT 20 reads only its 20 rows (read {read})", read == 20)
+    past = [category] + lazy_window(LAZY_DOCS, 20)
+    check("a SKIP past every match answers nothing", agg_ids(c, LAZY, past) == [])
+    check("a SKIP past every match reads nothing", documents_scanned(c, LAZY, past) == 0)
+
+
+def timed_against_the_scan(c, label, steps):
+    scan_time, index_time, _ = timed_scan_and_index(c, LAZY, steps, forced_scan(steps))
+    ratio = index_time / scan_time if scan_time > 0 else 0.0
+    detail = f"scan_best={scan_time * 1000:.2f}ms  indexed_best={index_time * 1000:.2f}ms  ratio={ratio:.2f}"
+    if caching_disabled(c):
+        check(f"{label}: the index path is not slower than the forced scan (within {SPEED_TOLERANCE:.2f}x)",
+              index_time <= scan_time * SPEED_TOLERANCE, detail=detail)
+    else:
+        check(f"{label}: the index path is faster than the forced scan", index_time < scan_time, detail=detail)
+
+
+def test_latest_n_reads_only_its_rows(c):
+    section("Latest-N: SORT ts desc + LIMIT 20 over the sort index answers the scan and reads 20 documents")
+    latest = [lazy_sort(False), {"type": "LIMIT", "limit": 20}]
+    for _ in range(3):
+        check("SORT ts desc, LIMIT 20 answers the scan's rows in order",
+              lazy_ids(c, latest) == lazy_ids(c, forced_scan(latest)))
+    read = documents_scanned(c, LAZY, latest)
+    check(f"SORT ts desc, LIMIT 20 reads only its 20 rows (read {read})", read == 20)
+    timed_against_the_scan(c, "SORT ts desc, LIMIT 20", latest)
+
+
+def test_unindexed_filter_sort_indexed_limit(c):
+    section("An unindexed FILTER + SORT on an indexed field + LIMIT walks the sort index within a budget")
+    budget = max(64 * 20, LAZY_DOCS // 64)
+    for label, source in (("region r3", [bu.filter_step("region", "EQUALS", "r3")]),
+                          ("region r2 and ts > half", [lazy_and(lazy_eq("region", "r2"), {
+                              "fieldOperatorType": "GREATER_THAN", "field": "ts", "value": LAZY_DOCS // 2})])):
+        for ascending in (True, False):
+            for skip in (0, 7):
+                steps = source + [lazy_sort(ascending)] + lazy_window(skip, 20)
+                name = f"{label}, ascending={ascending}, skip={skip}"
+                indexed = lazy_ids(c, steps)
+                check(f"{name}: answers the [SKIP 0] spelling's rows in order",
+                      len(indexed) == 20 and indexed == lazy_ids(c, forced_scan(steps)), detail=f"index={indexed[:4]}")
+                read = documents_scanned(c, LAZY, steps)
+                check(f"{name}: reads at most the walk budget of {budget} documents (read {read})",
+                      read is not None and read <= budget)
+    nothing = [bu.filter_step("region", "EQUALS", "r99"), lazy_sort(True), {"type": "LIMIT", "limit": 20}]
+    check("a FILTER matching nothing answers nothing", lazy_ids(c, nothing) == [] == lazy_ids(c, forced_scan(nothing)))
+    read = documents_scanned(c, LAZY, nothing)
+    check(f"a FILTER matching nothing gives up at the budget and scans once (read {read})",
+          read is not None and LAZY_DOCS < read <= LAZY_DOCS + budget)
+    timed_against_the_scan(c, "FILTER region, SORT ts, LIMIT 20",
+                           [bu.filter_step("region", "EQUALS", "r3"), lazy_sort(False), {"type": "LIMIT", "limit": 20}])
+
+
+def test_range_sort_skip_limit_fetches_only_the_page(c):
+    section("FILTER range on ts + SORT ts + SKIP + LIMIT drops the skipped ids before fetching")
+    for ascending in (True, False):
+        steps = [lazy_and({"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "ts", "value": 1000},
+                          {"fieldOperatorType": "SMALLER_THAN", "field": "ts", "value": LAZY_DOCS - 1000}),
+                 lazy_sort(ascending)] + lazy_window(5000, 1)
+        name = f"range, SORT ascending={ascending}, SKIP 5000, LIMIT 1"
+        check(f"{name}: answers the scan's row", lazy_ids(c, steps) == lazy_ids(c, forced_scan(steps)))
+        read = documents_scanned(c, LAZY, steps)
+        check(f"{name}: reads one document (read {read})", read == 1)
+    past = [bu.filter_step("ts", "GREATER_THAN", LAZY_DOCS - 10), lazy_sort(True)] + lazy_window(50, 5)
+    check("a SKIP past the range answers nothing and reads nothing",
+          lazy_ids(c, past) == [] and documents_scanned(c, LAZY, past) == 0)
+    timed_against_the_scan(c, "range, SORT, SKIP 5000, LIMIT 1", [
+        bu.filter_step("ts", "GREATER_THAN_EQUALS", 1000), lazy_sort(True)] + lazy_window(5000, 1))
+
+
+def lazy_sources_suite(c):
+    section(f"Lazy index sources over {LAZY_DOCS} documents")
+    setup_lazy_sources(c)
+    test_filter_map_limit_reads_one_chunk(c)
+    test_filter_other_field_sort_limit(c)
+    test_deep_skip_reads_page_only(c)
+    test_latest_n_reads_only_its_rows(c)
+    test_unindexed_filter_sort_indexed_limit(c)
+    test_range_sort_skip_limit_fetches_only_the_page(c)
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": LAZY})
+
+
+GROUP_SHAPES = "idxagg_group_shapes"
+GROUP_SHAPES_DOCS = 3000
+GROUP_SHAPES_KINDS = (1, "1", True, None, 1.5, "A", "a", [1, 2], [2, 1], {"x": 1}, False, "#geo(1.0,2.0)")
+SIZE_THEN_REMOVE = {"type": "MAP", "operators": [
+    {"fieldName": "size", "operator": {"type": "SIZE", "operand": "group"}}, {"fieldName": "group"}]}
+SIZE_ONLY = {"type": "MAP", "operators": [{"fieldName": "size", "operator": {"type": "SIZE", "operand": "group"}}]}
+REMOVE_GROUP = {"type": "MAP", "operators": [{"fieldName": "group"}]}
+
+
+def shape_doc(i: int) -> dict:
+    doc = {"_id": f"s{GROUP_SHAPES_DOCS - i:05d}", "cat": f"c{i % 10}", "plain": GROUP_SHAPES_KINDS[i % 12]}
+    if i % 7:
+        doc["sparse"] = None if i % 7 == 1 else f"v{i % 3}"
+    if i % 13 == 0:
+        del doc["plain"]
+    return doc
+
+
+def canonical_rows(r) -> list:
+    return sorted(json.dumps(row, sort_keys=True) for row in (r.get("results") or []))
+
+
+def check_group_count(c, field, label):
+    steps = [{"type": "GROUP_BY", "fieldName": field}, {"type": "COUNT"}]
+    groups = len(agg(c, GROUP_SHAPES, [{"type": "GROUP_BY", "fieldName": field}]).get("results") or [])
+    scan_time, index_time, resp = timed_scan_and_index(c, GROUP_SHAPES, steps, forced_scan(steps))
+    check(f"{label}: [GROUP_BY {field}, COUNT] counts the {groups} groups the GROUP_BY emits "
+          f"(index {index_time * 1000:.2f} ms, scan {scan_time * 1000:.2f} ms)",
+          bu.count_of(resp) == groups == bu.count_of(agg(c, GROUP_SHAPES, forced_scan(steps))),
+          detail=f"count={bu.count_of(resp)}")
+
+
+def check_sized_groups(c, field, label):
+    group = {"type": "GROUP_BY", "fieldName": field}
+    sized = agg(c, GROUP_SHAPES, [group, SIZE_THEN_REMOVE])
+    check_status(f"{label}: GROUP_BY {field} + MAP(SIZE, REMOVE) (OK)", sized, "OK")
+    check(f"{label}: GROUP_BY {field} + MAP(SIZE, REMOVE) answers what the sorted two-MAP spelling answers",
+          sized.get("results") == agg(c, GROUP_SHAPES, [group, SIZE_ONLY, REMOVE_GROUP]).get("results"))
+    check(f"{label}: GROUP_BY {field} + MAP(SIZE, REMOVE) answers what the scan answers",
+          canonical_rows(sized) == canonical_rows(agg(c, GROUP_SHAPES, forced_scan([group, SIZE_THEN_REMOVE]))))
+    kept = agg(c, GROUP_SHAPES, [group, SIZE_ONLY]).get("results") or []
+    ordered = all([d.get("_id") for d in row.get("group")] == sorted(d.get("_id") for d in row.get("group"))
+                  and row.get("size") == len(row.get("group")) for row in kept)
+    check(f"{label}: a MAP that keeps the group still lists it in _id order", bool(kept) and ordered)
+
+
+def test_group_by_and_distinct_shapes(c):
+    section(f"GROUP_BY + COUNT, GROUP_BY + MAP(SIZE, REMOVE) and an unindexed DISTINCT over {GROUP_SHAPES_DOCS} "
+            f"documents")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": GROUP_SHAPES})
+    bulk_load(c, GROUP_SHAPES, (shape_doc(i) for i in range(GROUP_SHAPES_DOCS)))
+    build_index(c, GROUP_SHAPES, "cat", "sparse")
+    wait_for_background()
+    check_group_count(c, "cat", "an indexed key")
+    if not caching_disabled(c):
+        check("[GROUP_BY cat, COUNT] uses the index",
+              index_used(c, GROUP_SHAPES, [{"type": "GROUP_BY", "fieldName": "cat"}, {"type": "COUNT"}]))
+    check_group_count(c, "sparse", "a key that is null or missing")
+    check_group_count(c, "plain", "an unindexed key of mixed kinds")
+    for field, label in (("cat", "an indexed key"), ("sparse", "a key that is null or missing"),
+                         ("plain", "an unindexed key of mixed kinds")):
+        check_sized_groups(c, field, label)
+    distinct = [{"type": "DISTINCT", "fieldName": "plain"}]
+    scan_time, _, rows = timed_scan_and_index(c, GROUP_SHAPES, distinct, distinct)
+    regrouped = agg(c, GROUP_SHAPES, [{"type": "GROUP_BY", "fieldName": "plain"}, REMOVE_GROUP])
+    check(f"an unindexed DISTINCT of mixed kinds answers one row per value ({scan_time * 1000:.2f} ms)",
+          len(rows.get("results") or []) == len(GROUP_SHAPES_KINDS)
+          and canonical_rows(rows) == canonical_rows(regrouped),
+          detail=f"rows={canonical_rows(rows)}")
+    check("an unindexed DISTINCT counts what it answers",
+          bu.count_of(agg(c, GROUP_SHAPES, distinct + [{"type": "COUNT"}])) == len(GROUP_SHAPES_KINDS))
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": GROUP_SHAPES})
 
 
 def main():
@@ -2570,11 +3023,17 @@ def main():
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_not_in_matches_scan(c)
+        test_complement_limits_and_in_counts_match_scan(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_a_range_count_across_index_chunks_matches_the_scan(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_colliding_values_group_exactly_and_fast(c)
+        test_self_pair_documents_dedupe_fast(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
@@ -2590,9 +3049,19 @@ def main():
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        lazy_sources_suite(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_group_by_and_distinct_shapes(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(c)
 
     test_materialising_steps_obey_the_deadline()
+
+    test_a_large_entry_range_top_k_is_sorted_once()
 
     bu.summary()
 

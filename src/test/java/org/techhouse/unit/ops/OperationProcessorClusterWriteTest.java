@@ -26,6 +26,7 @@ import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ClusterWriteHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -33,9 +34,14 @@ import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.resp.BulkSaveResponse;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.DeleteResponse;
+import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.SaveResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -147,6 +153,19 @@ public class OperationProcessorClusterWriteTest {
         assertEquals("421-1", response.getErrorCode());
     }
 
+    @Test
+    public void test_an_insert_on_a_node_that_lost_ownership_is_refused_as_not_owner() throws Exception {
+        final var self = node("self", 9990);
+        configureMembership(1, self);
+        assertEquals(OperationStatus.OK, processor.processMessage(save("held")).getStatus());
+        final var peer = peerOwningTheTestCollection(self);
+        assertNotNull(peer);
+        final var insert = save("held");
+        insert.setFailOnUpdate(true);
+
+        assertEquals("421-1", processor.processMessage(insert).getErrorCode());
+    }
+
     private String collectionOwnedByOther() {
         for (var i = 0; i < 500; i++) {
             if (!ownership.isOwner(TestGlobals.DB, "coll-" + i)) {
@@ -221,5 +240,108 @@ public class OperationProcessorClusterWriteTest {
         find.set_id("moved");
         assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus(),
                 "the write applied locally, so refusing it as not applied would be a lie");
+    }
+
+    private static DeleteRequest deleteWhereFlagged(String collName) {
+        final var request = new DeleteRequest(TestGlobals.DB, collName);
+        request.setCondition(new FieldOperator(FieldOperatorType.EQUALS, "flag", new JsonString("x")));
+        return request;
+    }
+
+    private SaveRequest flagged(String id) {
+        final var request = save(id);
+        request.getObject().add("flag", new JsonString("x"));
+        return request;
+    }
+
+    @Test
+    public void test_owner_conditional_delete_succeeds() throws Exception {
+        configureMembership(1, node("self", 9990));
+        assertInstanceOf(SaveResponse.class, processor.processMessage(flagged("f1")));
+        assertInstanceOf(SaveResponse.class, processor.processMessage(flagged("f2")));
+
+        final var response = processor.processMessage(deleteWhereFlagged(TestGlobals.COLL));
+
+        assertEquals(2L, assertInstanceOf(DeleteManyResponse.class, response).getDeletedCount());
+    }
+
+    @Test
+    public void test_conditional_delete_rejected_when_not_owner() throws Exception {
+        configureMembership(2, node("self", 9990), node("other", 9991));
+
+        final var response = processor.processMessage(deleteWhereFlagged(collectionOwnedByOther()));
+
+        assertEquals("421-1", response.getErrorCode());
+    }
+
+    @Test
+    public void test_a_conditional_delete_that_lost_ownership_before_reserving_deletes_nothing() throws Exception {
+        final var self = node("self", 9990);
+        configureMembership(1, self);
+        assertInstanceOf(SaveResponse.class, processor.processMessage(flagged("kept")));
+        final var peer = peerOwningTheTestCollection(self);
+        assertNotNull(peer);
+        ownership.onMembershipChanged(new MembershipView(List.of(self)));
+        armHalt(_ -> ownership.onMembershipChanged(new MembershipView(List.of(self, peer))));
+
+        final var response = processor.processMessage(deleteWhereFlagged(TestGlobals.COLL));
+
+        assertEquals("421-1", response.getErrorCode());
+        ownership.onMembershipChanged(new MembershipView(List.of(self)));
+        final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        find.set_id("kept");
+        assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus(),
+                "a reservation refused for a lost ownership deletes nothing");
+    }
+
+    private static SaveRequest saveWhereFlagged(String collName) {
+        final var request = new SaveRequest(TestGlobals.DB, collName);
+        request.setCondition(new FieldOperator(FieldOperatorType.EQUALS, "flag", new JsonString("x")));
+        final var patch = new JsonObject();
+        patch.add("flag", new JsonString("y"));
+        request.setObject(patch);
+        return request;
+    }
+
+    @Test
+    public void test_owner_conditional_save_succeeds() throws Exception {
+        configureMembership(1, node("self", 9990));
+        assertInstanceOf(SaveResponse.class, processor.processMessage(flagged("u1")));
+        assertInstanceOf(SaveResponse.class, processor.processMessage(flagged("u2")));
+
+        final var response = processor.processMessage(saveWhereFlagged(TestGlobals.COLL));
+
+        assertEquals(2L, assertInstanceOf(SaveWhereResponse.class, response).getUpdatedCount());
+    }
+
+    @Test
+    public void test_conditional_save_rejected_when_not_owner() throws Exception {
+        configureMembership(2, node("self", 9990), node("other", 9991));
+
+        final var response = processor.processMessage(saveWhereFlagged(collectionOwnedByOther()));
+
+        assertEquals("421-1", response.getErrorCode());
+    }
+
+    @Test
+    public void test_a_conditional_save_that_lost_ownership_after_the_recheck_is_an_unknown_outcome() throws Exception {
+        final var self = node("self", 9990);
+        configureMembership(1, self);
+        assertInstanceOf(SaveResponse.class, processor.processMessage(flagged("kept")));
+        final var peer = peerOwningTheTestCollection(self);
+        assertNotNull(peer);
+        ownership.onMembershipChanged(new MembershipView(List.of(self)));
+        armHalt(_ -> ownership.onMembershipChanged(new MembershipView(List.of(self, peer))));
+
+        final var response = processor.processMessage(saveWhereFlagged(TestGlobals.COLL));
+
+        assertEquals(ErrorCode.WRITE_OUTCOME_UNKNOWN.getCode(), response.getErrorCode());
+        assertEquals(OperationType.SAVE, response.getType());
+        ownership.onMembershipChanged(new MembershipView(List.of(self)));
+        final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        find.set_id("kept");
+        final var found = assertInstanceOf(FindByIdResponse.class, processor.processMessage(find));
+        assertEquals("y", found.getObject().get("flag").asJsonString().getValue(),
+                "the update applied locally, so refusing it as not applied would be a lie");
     }
 }

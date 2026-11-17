@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.fs.PagePlacement;
 
@@ -17,15 +18,26 @@ public class PagePlacementTest {
     }
 
     @Test
-    public void anUpdateVacuumsWhenAQuarterPageWouldBeFreeAfterward() {
-        assertEquals(PagePlacement.VACUUM_THEN_APPEND, PagePlacement.forUpdate(750, 950, 100, MAX));
+    public void anUpdateVacuumsWhenAQuarterPageIsDeadAndTheKeptOldCopyStillLeavesRoom() {
+        assertEquals(PagePlacement.VACUUM_THEN_APPEND, PagePlacement.forUpdate(650, 950, 100, MAX));
         assertEquals(PagePlacement.VACUUM_THEN_APPEND, PagePlacement.forUpdate(100, 1000, 1, MAX));
+        assertEquals(PagePlacement.VACUUM_THEN_APPEND, PagePlacement.forUpdate(700, 1000, 300, MAX));
     }
 
     @Test
-    public void anUpdateRelocatesWhenTheLiveDataLeavesLessThanAQuarterFree() {
+    public void anUpdateRelocatesWhenLessThanAQuarterPageIsDead() {
         assertEquals(PagePlacement.RELOCATE, PagePlacement.forUpdate(751, 950, 100, MAX));
         assertEquals(PagePlacement.RELOCATE, PagePlacement.forUpdate(1100, 1000, 200, MAX));
+    }
+
+    @Test
+    public void test_an_update_relocates_when_the_live_bytes_and_the_new_line_overflow_the_page() {
+        assertEquals(PagePlacement.RELOCATE, PagePlacement.forUpdate(700, 1000, 301, MAX),
+                "a vacuum keeps the old copy, so the page would end past the cap");
+        final var twoMb = 2L * 1024 * 1024;
+        assertEquals(PagePlacement.RELOCATE, PagePlacement.forUpdate(1_400_000, 1_400_000, 700_000, twoMb));
+        assertEquals(PagePlacement.RELOCATE, PagePlacement.forUpdate(1_400_000, 2_000_000, 700_000, twoMb));
+        assertEquals(PagePlacement.VACUUM_THEN_APPEND, PagePlacement.forUpdate(700_000, 1_400_000, 700_000, twoMb));
     }
 
     @Test
@@ -88,12 +100,42 @@ public class PagePlacementTest {
     }
 
     @Test
-    public void test_vacuums_after_delete() {
+    public void test_a_delete_vacuums_at_a_quarter_page_dead() {
         assertTrue(PagePlacement.vacuumsAfterDelete(750, 1000, MAX), "a quarter page dead");
         assertFalse(PagePlacement.vacuumsAfterDelete(751, 1000, MAX), "less than a quarter page dead");
-        assertTrue(PagePlacement.vacuumsAfterDelete(0, 30, MAX), "an emptied page always goes");
-        assertTrue(PagePlacement.vacuumsAfterDelete(-5, 30, MAX), "a stale count still empties the page");
-        assertFalse(PagePlacement.vacuumsAfterDelete(0, 0, MAX), "an empty file has nothing to give back");
         assertTrue(PagePlacement.vacuumsAfterDelete(900, 1400, MAX), "a page grown past the cap");
+    }
+
+    @Test
+    public void test_an_emptied_page_is_vacuumed_after_any_write() {
+        for (final var emptied : List.of(0L, -5L)) {
+            assertTrue(PagePlacement.vacuumsAfterWrite(emptied, 30, MAX), "an emptied page always goes");
+            assertTrue(PagePlacement.vacuumsAfterDelete(emptied, 30, MAX), "a stale count still empties the page");
+        }
+        assertFalse(PagePlacement.vacuumsAfterWrite(0, 0, MAX), "an empty file has nothing to give back");
+        assertFalse(PagePlacement.vacuumsAfterDelete(0, 0, MAX));
+    }
+
+    @Test
+    public void test_a_small_page_vacuums_after_write_once_its_dead_bytes_reach_the_floor_and_its_live_bytes() {
+        final var twoMb = 2L * 1024 * 1024;
+        final var floor = 16 * 1024;
+        assertTrue(PagePlacement.vacuumsAfterWrite(1000, 1000 + floor, twoMb));
+        assertTrue(PagePlacement.vacuumsAfterDelete(1000, 1000 + floor, twoMb));
+        assertFalse(PagePlacement.vacuumsAfterWrite(1000, 1000 + floor - 1, twoMb), "below the 16 KB floor");
+        assertFalse(PagePlacement.vacuumsAfterDelete(1000, 1000 + floor - 1, twoMb));
+        assertTrue(PagePlacement.vacuumsAfterWrite(40_000, 80_000, twoMb));
+        assertFalse(PagePlacement.vacuumsAfterWrite(40_000, 79_999, twoMb), "fewer dead than live bytes");
+    }
+
+    @Test
+    public void test_a_large_page_is_left_to_the_placement_rules_after_an_update_and_vacuumed_at_a_quarter_after_a_delete() {
+        final var twoMb = 2L * 1024 * 1024;
+        final var quarterDead = twoMb - twoMb / 4;
+        assertFalse(PagePlacement.vacuumsAfterWrite(quarterDead, twoMb, twoMb),
+                "rewriting 1.5 MB to free 512 KB is left to the next update that finds no room");
+        assertTrue(PagePlacement.vacuumsAfterDelete(quarterDead, twoMb, twoMb));
+        assertFalse(PagePlacement.vacuumsAfterDelete(quarterDead + 1, twoMb, twoMb));
+        assertTrue(PagePlacement.vacuumsAfterWrite(700_000, 1_400_000, twoMb), "a 700 KB document's old copy");
     }
 }

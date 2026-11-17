@@ -9,4 +9,7 @@ interface Forcer {
     Forcer DEVICE = (channel, _) -> channel.force(false);
 
     void force(FileChannel channel, Path path) throws IOException;
+
+    default void forceFailed(Path path) {
+    }
 }

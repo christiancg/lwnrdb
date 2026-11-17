@@ -4,7 +4,7 @@ import random
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Union
 
 import base_utils as bu
 from base_utils import check, check_status, section
@@ -22,6 +22,7 @@ GROUP_WRITERS = 8
 CONCURRENT_COLL = "group_writers"
 CONCURRENT_SAVES = 40
 DELETE_VACUUM_DOCS = 24
+PRE_WRITE_VACUUM_DOCS = 7
 DELETE_CHECKPOINT_DOCS = 300
 AUDIT_SOURCE = ("import db from 'db'; import args from 'args';"
                 " db.save(db.name, '{audit}', {{ doc: args.id, event: args.event }}); return 1;")
@@ -40,7 +41,7 @@ class KillCase:
     expected: Callable[["KillCase"], dict]
     indexed: bool = False
     repairs_index: bool = False
-    intents_while_paused: int = 0
+    intents_while_paused: Union[int, set] = 0
     logged_while_paused: bool = True
     writers: int = 1
     triggered: bool = False
@@ -140,21 +141,37 @@ def without_attempted_deletes(case: KillCase) -> dict:
     return {key: value for key, value in all_acknowledged(case).items() if key not in gone}
 
 
+def without_attempted_deletes_but_the_last(case: KillCase) -> dict:
+    attempted = case.observed.get("attempted", [])
+    gone = set(attempted[:-1])
+    return {key: value for key, value in all_acknowledged(case).items() if key not in gone}
+
+
+def checkpointed_by_the_writer_or_the_background(writer_paused: Callable, background_paused: Callable):
+    return lambda case: [writer_paused(case), background_paused(case)]
+
+
 def cases() -> list:
-    vacuum = KillCase("intent_vacuum_renamed", "PAGE_VACUUM_RENAMED", 4, None, last_acknowledged_k1,
-                      intents_while_paused=1, logged_while_paused=False)
+    vacuum = KillCase("intent_vacuum_renamed", "PAGE_VACUUM_RENAMED", PRE_WRITE_VACUUM_DOCS, None,
+                      last_acknowledged_k1, intents_while_paused=1, logged_while_paused=False)
     vacuum.write = churn_k1_until_paused(vacuum)
-    checkpoint = KillCase("wal_checkpoint_forced", "WAL_CHECKPOINT_FORCED", 4, None, last_attempted_k1,
+    post_update_vacuum = KillCase("intent_post_update_vacuum_renamed", "PAGE_VACUUM_RENAMED", 4, None,
+                                  last_attempted_k1, intents_while_paused=1)
+    post_update_vacuum.write = churn_k1_until_paused(post_update_vacuum)
+    checkpoint = KillCase("wal_checkpoint_forced", "WAL_CHECKPOINT_FORCED", 4, None,
+                          checkpointed_by_the_writer_or_the_background(last_attempted_k1, last_acknowledged_k1),
                           logged_while_paused=False)
     checkpoint.write = churn_k1_until_paused(checkpoint)
     delete_vacuum = KillCase("intent_delete_vacuum_renamed", "PAGE_VACUUM_RENAMED", DELETE_VACUUM_DOCS, None,
                              without_attempted_deletes, intents_while_paused=1, logged_while_paused=False)
     delete_vacuum.write = delete_until_paused(delete_vacuum)
     delete_checkpoint = KillCase("wal_delete_checkpoint_forced", "WAL_CHECKPOINT_FORCED", DELETE_CHECKPOINT_DOCS,
-                                 None, without_attempted_deletes, logged_while_paused=False)
+                                 None, checkpointed_by_the_writer_or_the_background(
+                                     without_attempted_deletes, without_attempted_deletes_but_the_last),
+                                 intents_while_paused={0, 1}, logged_while_paused=False)
     delete_checkpoint.write = delete_until_paused(delete_checkpoint)
-    rewrite_begun = KillCase("wal_rewrite_begun", "WAL_REWRITE_BEGUN", 4, None, last_acknowledged_k1,
-                             logged_while_paused=False)
+    rewrite_begun = KillCase("wal_rewrite_begun", "WAL_REWRITE_BEGUN", 4, None, last_attempted_k1,
+                             intents_while_paused=1)
     rewrite_begun.write = churn_k1_until_paused(rewrite_begun)
     return [
         [KillCase("wal_update_logged", "PAGE_COPY_APPENDED", KILLED_DOCS, update_k1("unacknowledged"),
@@ -165,7 +182,7 @@ def cases() -> list:
                   with_k1("unacknowledged")),
          KillCase("wal_update_applied", "PK_ROW_COMMITTED", KILLED_DOCS, update_k1("unacknowledged"),
                   with_k1("unacknowledged")),
-         checkpoint],
+         checkpoint, post_update_vacuum],
         [KillCase("wal_bulk_logged", "PAGE_COPY_APPENDED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged")),
          KillCase("wal_relocate_applied", "PK_ROW_COMMITTED", 11, update_k1("unacknowledged", GROWN),
                   with_k1("unacknowledged")),
@@ -186,6 +203,9 @@ def cases() -> list:
          KillCase("group_runs_staged", "GROUP_RUNS_STAGED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,
                   indexed=True, writers=GROUP_WRITERS, triggered=True)],
     ]
+
+
+GROUP_FORCE_POINTS = {"WAL_GROUP_APPENDED", "WAL_GROUP_FORCED", "GROUP_RUNS_STAGED"}
 
 
 def collection_folder(work_dir: str, coll: str) -> str:
@@ -269,24 +289,27 @@ def write_once(conn_factory, case: KillCase, writer: int, connected: threading.S
         pass
 
 
-def queue_a_group_behind_a_parked_writer(conn, conn_factory, case: KillCase):
-    subject = f"{DB}|{case.coll}"
+def queue_a_group_behind_a_held_lock(conn_factory, case: KillCase):
     connected = threading.Semaphore(0)
-    check_status(f"park the first writer of {case.coll} under its collection lock",
-                 conn.send({"type": "ARM_FAULT", "point": "WRITE_OWNER_PROBED", "action": "PAUSE",
-                            "match": subject}), "OK")
-    run_writers(conn_factory, case, range(1), connected)
-    check_status(f"the first writer of {case.coll} is parked",
-                 conn.send({"type": "AWAIT_FAULT", "point": "WRITE_OWNER_PROBED", "timeoutMs": 30000}), "OK")
-    run_writers(conn_factory, case, range(1, case.writers), connected)
-    queued = all(connected.acquire(timeout=30) for _ in range(case.writers))
-    check(f"every writer of {case.coll} connected", queued)
-    time.sleep(0.5)
-    check_status(f"release the first writer of {case.coll} so the queued ones form a group",
-                 conn.send({"type": "RELEASE_FAULT", "point": "WRITE_OWNER_PROBED"}), "OK")
+    with conn_factory() as holder:
+        check_status(f"a transaction takes the collection lock of {case.coll}",
+                     holder.send({"type": "START_TRANSACTION"}), "OK")
+        check_status(f"its buffered write holds {case.coll} until the rollback",
+                     save(holder, case.coll, {"_id": "lock_holder", "v": "never"}), "OK")
+        run_writers(conn_factory, case, range(case.writers), connected)
+        queued = all(connected.acquire(timeout=30) for _ in range(case.writers))
+        check(f"every writer of {case.coll} connected", queued)
+        time.sleep(0.5)
+        check_status(f"roll back so the writers queued on {case.coll} form one group",
+                     holder.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
 
 
-def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
+def plain_restart(work_dir: str) -> None:
+    return None
+
+
+def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list,
+                   recover: Callable[[str], None] = plain_restart):
     with conn_factory() as conn:
         for case in kill_round:
             check_status(f"arm {case.point} PAUSE for {case.coll}",
@@ -294,7 +317,7 @@ def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
                                     "match": f"{DB}|{case.coll}"}), "OK")
         for case in kill_round:
             if case.writers > 1:
-                queue_a_group_behind_a_parked_writer(conn, conn_factory, case)
+                queue_a_group_behind_a_held_lock(conn_factory, case)
             else:
                 run_writers(conn_factory, case, range(case.writers), threading.Semaphore(0))
             check_status(f"the write to {case.coll} reached {case.point}",
@@ -303,17 +326,24 @@ def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
             case.observed["logged"] = bu.logged_writes(collection_folder(work_dir, case.coll))
     proc.kill()
     proc.wait(timeout=30)
+    recover(work_dir)
 
 
-def run(work_dir: str, log_path: str, conn_factory, write_config: Callable[[], None]):
+def run(work_dir: str, log_path: str, conn_factory, write_config: Callable[[], None],
+        recover: Callable[[str], None] = plain_restart):
     rounds = cases()
     write_config()
     proc = bu.start_server(work_dir, log_path)
     with conn_factory() as conn:
+        if not bu.server_syncs_writes(conn):
+            rounds = [kept for kept in ([case for case in kill_round if case.point not in GROUP_FORCE_POINTS]
+                                        for kill_round in rounds) if kept]
+            bu.warn("skipped the group-commit kill cases: the server runs without synced writes, so no write group"
+                    " forms")
         seed(conn, rounds)
     for number, kill_round in enumerate(rounds, start=1):
         print(f"\n  Killing the server mid-write, round {number} of {len(rounds)} ...")
-        kill_mid_write(proc, conn_factory, work_dir, kill_round)
+        kill_mid_write(proc, conn_factory, work_dir, kill_round, recover)
         proc = bu.start_server(work_dir, log_path)
     return proc, rounds
 
@@ -392,7 +422,16 @@ def trigger_runs_of(conn, coll: str) -> list:
     return [trigger_run for trigger_run in runs if coll in json.dumps(trigger_run)]
 
 
-def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: str, rounds: list):
+def lost_paused_write(case: KillCase) -> dict:
+    if case.expected is last_attempted_k1:
+        return last_acknowledged_k1(case)
+    if case.expected is without_attempted_deletes:
+        return without_attempted_deletes_but_the_last(case)
+    return all_acknowledged(case)
+
+
+def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: str, rounds: list,
+                                                               power_loss: bool = False):
     for case in (case for kill_round in rounds for case in kill_round):
         if case.writers > 1:
             test_a_killed_group_recovers_whole_documents(conn, case)
@@ -400,25 +439,35 @@ def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: s
                 test_a_killed_triggered_group_audits_each_landed_write_once(conn, case)
             continue
         section(f"A write killed at {case.point} in {case.coll} recovers to what its write-ahead log committed")
-        expected = case.expected(case)
-        ids = sorted({f"k{i}" for i in range(case.seed_docs)} | set(expected))
+        outcomes = case.expected(case)
+        outcomes = outcomes if isinstance(outcomes, list) else [outcomes]
+        if power_loss:
+            outcomes = outcomes + [lost_paused_write(case)]
+        ids = sorted({f"k{i}" for i in range(case.seed_docs)}.union(*outcomes))
         found = values_by_id(conn, case.coll, ids)
+        expected = next((outcome for outcome in outcomes if outcome == found), outcomes[0])
+        lost = power_loss and found == outcomes[-1] and found not in outcomes[:-1]
         check("FIND_BY_ID answers exactly the committed values", found == expected,
-              f"expected {expected} got {found}")
+              f"expected {' or '.join(map(str, outcomes))} got {found}")
         check("a full scan lists exactly the same documents", scanned_ids(conn, case.coll) == sorted(expected),
               f"scan={scanned_ids(conn, case.coll)}")
         check("the index-only COUNT agrees", pk_count(conn, case.coll) == len(expected))
         check("no write intent is left", not intents_left(work_dir, case.coll),
               f"left: {intents_left(work_dir, case.coll)}")
-        check(f"the paused write had {case.intents_while_paused} intent(s) on disk",
-              case.observed.get("intents") == case.intents_while_paused, f"saw {case.observed.get('intents')}")
+        allowed = case.intents_while_paused if isinstance(case.intents_while_paused, set) \
+            else {case.intents_while_paused}
+        check(f"the paused write had {' or '.join(map(str, sorted(allowed)))} intent(s) on disk",
+              case.observed.get("intents") in allowed, f"saw {case.observed.get('intents')}")
         if case.logged_while_paused:
             check("the paused write was already in the write-ahead log", case.observed.get("logged", 0) >= 1,
                   f"saw {case.observed.get('logged')}")
-        if case.indexed:
+        if lost:
+            bu.warn(f"the unacknowledged write paused at {case.point} in {case.coll} was lost with the power",
+                    "it was never forced, so a power loss may drop it")
+        if case.indexed and not lost:
             bu.wait_until(lambda: indexed_count(conn, case.coll, "acknowledged-1") == 0, timeout_s=15, interval_s=0.2)
             check("the old value left no field-index entry", indexed_count(conn, case.coll, "acknowledged-1") == 0)
-        if case.repairs_index:
+        if case.repairs_index and not lost:
             bu.wait_until(lambda: indexed_types_of(work_dir, case.coll, "v", "k1") == ["Number"], timeout_s=15,
                           interval_s=0.2)
             check("startup re-queued the replayed write's index work, so the index files hold k1 only as a Number",

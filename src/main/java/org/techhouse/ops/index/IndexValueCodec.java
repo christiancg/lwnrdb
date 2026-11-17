@@ -1,5 +1,6 @@
 package org.techhouse.ops.index;
 
+import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
@@ -28,7 +29,7 @@ public final class IndexValueCodec {
         }
         if (element.isJsonPrimitive()) {
             return switch (element.asJsonPrimitive()) {
-                case JsonCustom<?> c -> c;
+                case JsonCustom<?> c -> IndexKind.valueKeysCandidatesOnly(c) ? null : c;
                 case JsonNumber n -> n.getValue();
                 case JsonBoolean b -> b.getValue();
                 case JsonString s -> s.getValue();

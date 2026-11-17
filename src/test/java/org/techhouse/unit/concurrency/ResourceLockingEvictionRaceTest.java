@@ -11,6 +11,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ReadTrackingLock;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
@@ -34,7 +35,7 @@ public class ResourceLockingEvictionRaceTest {
     }
 
     private ReentrantReadWriteLock heldOrphan(String lockName) throws Exception {
-        final var orphan = new ReentrantReadWriteLock();
+        final var orphan = new ReadTrackingLock();
         orphan.writeLock().lock();
         locks().put(lockName, orphan);
         return orphan;
@@ -164,7 +165,7 @@ public class ResourceLockingEvictionRaceTest {
         assertNull(locks().get(COLL_ID));
     }
 
-    private final class AcquiredDuringEviction extends ReentrantReadWriteLock {
+    private final class AcquiredDuringEviction extends ReadTrackingLock {
         private final AtomicBoolean fired = new AtomicBoolean();
         private final CountDownLatch acquired = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);

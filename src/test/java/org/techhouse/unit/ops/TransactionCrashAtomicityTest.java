@@ -232,6 +232,7 @@ public class TransactionCrashAtomicityTest {
         } finally {
             locks.releaseWrite(collId);
             Tx2pcLog.deleteParticipantMarker(dtxId);
+            TxCommitLog.clearLocalCommit(dtxId);
             AdminOperationHelper.deleteTransactionOps(List.of(goodOp.get_id(), corrupt.get_id()));
         }
     }

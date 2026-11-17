@@ -213,6 +213,18 @@ public class MessageProcessorTimeoutTest {
     }
 
     @Test
+    public void test_server_info_after_a_reap_answers_and_leaves_the_notice_for_the_next_request() throws Exception {
+        openAndReap("idle-7");
+
+        final var info = connection.exchange("{\"type\":\"SERVER_INFO\"}");
+
+        assertTrue(info.contains("\"READY\"") && !info.contains("409-16"), info);
+        final var refused = connection.exchange(save("after-info"));
+        assertTrue(refused.contains("409-16"), refused);
+        assertTrue(connection.exchange(findById("after-info")).contains("NOT_FOUND"));
+    }
+
+    @Test
     public void test_only_one_request_is_refused_after_a_reap() throws Exception {
         openAndReap("idle-6");
 

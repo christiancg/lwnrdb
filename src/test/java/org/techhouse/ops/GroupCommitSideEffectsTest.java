@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
@@ -31,15 +30,15 @@ import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.test.TriggerTestSupport;
 
+@RequiresDirectorySync
 public class GroupCommitSideEffectsTest {
     private static final String ACTOR = "alice";
-    private static final String DRAIN_MARKER = "__drain-marker__";
     private static final String RUNS_WAL = "trigger_runs.wal";
-    private static final long GROUP_BASE_FORCE = 1L;
     private static final long COLD_HOOK_TIMEOUT_MS = 30_000L;
     private static final String SUBJECT = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -109,19 +108,13 @@ public class GroupCommitSideEffectsTest {
         return writes;
     }
 
-    private Set<String> dispatchedIds() throws InterruptedException {
-        final var drained = new CountDownLatch(1);
-        triggerExecutor.stop();
-        triggerExecutor.start(event -> {
-            if (DRAIN_MARKER.equals(event.getTriggerName())) {
-                drained.countDown();
-            } else {
-                dispatched.add(event);
-            }
-        });
-        triggerExecutor.submit(new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, DRAIN_MARKER,
-                "audit", false, List.of(), ACTOR, 0));
-        assertTrue(drained.await(5, TimeUnit.SECONDS), "the drain marker was never dispatched");
+    private void awaitDispatches() {
+        assertTrue(triggerExecutor.drain(GroupCommitFixture.WAIT_MS), "the trigger queue never drained");
+        triggerExecutor.start(dispatched::add);
+    }
+
+    private Set<String> dispatchedIds() {
+        awaitDispatches();
         final var ids = new TreeSet<String>();
         for (final var event : dispatched) {
             event.getEntries().stream().map(DbEntry::get_id).forEach(ids::add);
@@ -153,7 +146,7 @@ public class GroupCommitSideEffectsTest {
         final var responses = fixture.runQueued(saves(fixture, "a", "b", "c", "d", "seed"));
 
         assertTrue(allOk(responses), describe(responses));
-        assertEquals(GROUP_BASE_FORCE + 1L, fixture.walForces());
+        assertEquals(1L, fixture.walForces());
         assertEquals("v-seed", fixture.valueOf("seed"));
     }
 
@@ -165,7 +158,7 @@ public class GroupCommitSideEffectsTest {
                 () -> fixture.save("a", "second"), () -> fixture.save("c", "v")));
 
         assertTrue(allOk(responses), describe(responses));
-        assertEquals(GROUP_BASE_FORCE + 2L, fixture.walForces(), "the second write on a starts the next batch");
+        assertEquals(2L, fixture.walForces(), "the second write on a starts the next batch");
         assertEquals("second", fixture.valueOf("a"));
     }
 
@@ -203,7 +196,7 @@ public class GroupCommitSideEffectsTest {
         final var responses = fixture.runQueued(saves(fixture, "a", "b", "c", "d", "e", "f"));
 
         assertTrue(allOk(responses), describe(responses));
-        assertEquals(GROUP_BASE_FORCE + 1L, fixture.walForces());
+        assertEquals(1L, fixture.walForces());
         assertEquals(1L, fixture.forcesOf(RUNS_WAL), "every staged run of the batch rides one record");
         assertTrue(dispatchedIds().containsAll(Set.of("a", "b", "c", "d", "e", "f")));
     }
@@ -232,6 +225,7 @@ public class GroupCommitSideEffectsTest {
         installAfterTrigger();
         assertTrue(allOk(fixture.runQueued(saves(fixture, "base1", "base2"))), "logs the group base");
         TriggerTestSupport.consumeAllPendingRuns();
+        awaitDispatches();
         dispatched.clear();
         recorder.failingFor(GroupCommitFixture.WAL);
 

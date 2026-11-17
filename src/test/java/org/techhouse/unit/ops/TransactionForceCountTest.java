@@ -23,9 +23,11 @@ import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.test.ClusterTestHarness;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
 public class TransactionForceCountTest {
     private static final String COORDINATOR = "127.0.0.1:9999";
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);

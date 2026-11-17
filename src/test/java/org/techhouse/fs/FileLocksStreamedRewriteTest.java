@@ -40,6 +40,16 @@ public class FileLocksStreamedRewriteTest {
     }
 
     @Test
+    public void aFailedRewriteLeavesNoTemporaryFile() {
+        final var target = new File(tmp, "full.wal");
+        assertThrows(IOException.class, () -> FileLocks.rewriteFileAtomically(target.toPath(), out -> {
+            out.write("partial\n".repeat(10_000).getBytes(StandardCharsets.UTF_8));
+            throw new IOException("No space left on device");
+        }));
+        assertFalse(new File(tmp, "full.wal.repair").exists());
+    }
+
+    @Test
     public void streamedRewriteCreatesOwnerOnly() throws IOException {
         assumeTrue(FileSystems.getDefault().supportedFileAttributeViews().contains("posix"));
         final var target = new File(tmp, "fresh.idx");

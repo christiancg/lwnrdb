@@ -4,10 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -32,10 +35,11 @@ public class FileSystemWriteTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_create_base_db_path_invalid_path() throws Exception {
+    public void test_create_base_db_path_invalid_path(@TempDir Path tmp) throws Exception {
+        final var notAFolder = Files.createFile(tmp.resolve("not-a-folder"));
         FileSystem fs = new FileSystem();
         Configuration config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", "/invalid/path/that/cannot/be/created");
+        TestUtils.setPrivateField(config, "filePath", notAFolder.resolve("cannot").resolve("be-created").toString());
 
         assertThrows(DirectoryNotFoundException.class, fs::createBaseDbPath);
     }

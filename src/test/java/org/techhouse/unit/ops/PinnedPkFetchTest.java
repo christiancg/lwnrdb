@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -26,6 +25,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
@@ -99,7 +99,7 @@ public class PinnedPkFetchTest {
     }
 
     @Test
-    void anIndexedSortReadsThePkIndexOncePerPipeline() throws Exception {
+    void anIndexedSortPointScansItsFirstChunksThenReadsThePkIndexOnce() throws Exception {
         insert(COLL, 2000, "price", (data, field, i) -> data.addProperty(field, (i * 37) % 2000));
         index(COLL, "price");
         spyOnTinyCache();
@@ -109,7 +109,7 @@ public class PinnedPkFetchTest {
 
         assertEquals(2000, counted.getFirst().get("count").asJsonNumber().asInteger());
         verify(spied, times(1)).readWholePkIndexFile(DB, COLL);
-        verify(spied, never()).pkRowsFor(eq(DB), eq(COLL), anyCollection());
+        verify(spied, times(PipelineContext.POINT_SCANS_BEFORE_PIN)).pkRowsFor(eq(DB), eq(COLL), anyCollection());
     }
 
     @Test

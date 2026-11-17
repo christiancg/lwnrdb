@@ -15,6 +15,7 @@ import java.util.Spliterators;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -25,6 +26,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.RangeIdWalk;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
+import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.JsonUtils;
 
 public final class SortOperatorHelper {
@@ -32,34 +34,48 @@ public final class SortOperatorHelper {
     private static final int MIN_ID_FETCH_CHUNK = 32;
     private static final int MAX_BOUNDED_SORT = 4096;
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
     private SortOperatorHelper() {
     }
 
-    private record Keyed(JsonObject document, JsonBaseElement key, int seq) {
+    private record Keyed(JsonObject document, JsonBaseElement key, int seq, long heldBytes) {
     }
 
-    public static Stream<JsonObject> processSortStep(SortAggregationStep sortStep, Stream<JsonObject> resultStream,
-            String dbName, String collName, long bound, PipelineContext context) throws IOException {
+    record Sorted(Stream<JsonObject> rows, boolean skipApplied) {
+    }
+
+    static Sorted processSortStep(SortAggregationStep sortStep, Stream<JsonObject> resultStream, String dbName,
+            String collName, long bound, long skip, PipelineContext context) throws IOException {
         final var fieldName = sortStep.getFieldName();
         final var ascending = sortStep.getAscending();
         if (resultStream == null && (bound > 0 || !ScanPreference.indexFetchNotWorthIt(dbName, collName))) {
             final var orderedIds = IndexHelper.getSortedIdsForField(dbName, collName, fieldName, entryOrder(ascending),
                     bound > 0 ? bound : Long.MAX_VALUE, context);
             if (orderedIds != null) {
-                return fetchInOrder(orderedIds, dbName, collName, bound, context);
+                return fetchSkipping(orderedIds, dbName, collName, bound, skip, context);
             }
             final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName, context);
             if (indexEntries != null) {
-                return sortViaIndex(indexEntries, dbName, collName, ascending, bound, context);
+                return new Sorted(sortViaIndex(indexEntries, dbName, collName, ascending, bound, context), false);
             }
         }
         final var source = context.source(resultStream, dbName, collName);
         final var comparator = keyComparator(ascending);
         if (bound > 0 && bound <= MAX_BOUNDED_SORT) {
-            return boundedSort(source, fieldName, comparator, (int) bound);
+            return new Sorted(boundedSort(source, fieldName, comparator, (int) bound, context), false);
         }
-        return fullSort(source, fieldName, comparator);
+        return new Sorted(fullSort(source, fieldName, comparator, new HeldRows(context)), false);
+    }
+
+    private static Sorted fetchSkipping(List<String> orderedIds, String dbName, String collName, long bound, long skip,
+            PipelineContext context) {
+        if (skip <= 0 || !locks.holdsCollectionLock(dbName, collName)) {
+            return new Sorted(fetchInOrder(orderedIds, dbName, collName, bound, context), false);
+        }
+        context.tick(Math.min(skip, orderedIds.size()));
+        final var rest = orderedIds.subList((int) Math.min(skip, orderedIds.size()), orderedIds.size());
+        return new Sorted(fetchInOrder(rest, dbName, collName, bound > 0 ? bound - skip : bound, context), true);
     }
 
     private static Comparator<Keyed> keyComparator(boolean ascending) {
@@ -75,24 +91,25 @@ public final class SortOperatorHelper {
     }
 
     private static Stream<JsonObject> fullSort(Stream<JsonObject> source, String fieldName,
-            Comparator<Keyed> comparator) {
-        final var decorated = decorate(source, fieldName);
+            Comparator<Keyed> comparator, HeldRows held) {
+        final var decorated = decorate(source, fieldName, held);
         Arrays.parallelSort(decorated, comparator);
         return Arrays.stream(decorated).map(Keyed::document);
     }
 
     private static Stream<JsonObject> boundedSort(Stream<JsonObject> source, String fieldName,
-            Comparator<Keyed> comparator, int bound) {
+            Comparator<Keyed> comparator, int bound, PipelineContext context) {
         final var heap = new PriorityQueue<>(comparator.reversed());
         final var seq = new int[]{0};
+        final var path = FieldPath.of(fieldName);
         try (var documents = source) {
             documents.forEach(document -> {
-                final var keyed = new Keyed(document, JsonUtils.getFromPath(document, fieldName), seq[0]++);
+                final var keyed = new Keyed(document, path.valueIn(document), seq[0]++, 0L);
                 if (heap.size() < bound) {
-                    heap.offer(keyed);
+                    heap.offer(held(keyed, context));
                 } else if (comparator.compare(heap.peek(), keyed) > 0) {
-                    heap.poll();
-                    heap.offer(keyed);
+                    context.releaseHeld(heap.remove().heldBytes());
+                    heap.offer(held(keyed, context));
                 }
             });
         }
@@ -101,11 +118,20 @@ public final class SortOperatorHelper {
         return Arrays.stream(retained).map(Keyed::document);
     }
 
-    private static Keyed[] decorate(Stream<JsonObject> source, String fieldName) {
+    private static Keyed held(Keyed keyed, PipelineContext context) {
+        final var bytes = HeldRows.bytesAtMost(keyed.document());
+        context.chargeHeld(bytes);
+        return new Keyed(keyed.document(), keyed.key(), keyed.seq(), bytes);
+    }
+
+    private static Keyed[] decorate(Stream<JsonObject> source, String fieldName, HeldRows held) {
         final var decorated = new ArrayList<Keyed>();
+        final var path = FieldPath.of(fieldName);
         try (var documents = source) {
-            documents.forEach(document -> decorated
-                    .add(new Keyed(document, JsonUtils.getFromPath(document, fieldName), decorated.size())));
+            documents.forEach(document -> {
+                held.hold(document);
+                decorated.add(new Keyed(document, path.valueIn(document), decorated.size(), 0L));
+            });
         }
         return decorated.toArray(Keyed[]::new);
     }
@@ -117,14 +143,29 @@ public final class SortOperatorHelper {
         }
         final var range = SingleRange.of(steps.getFirst());
         if (range == null || !range.bounds().fieldName().equals(sortStep.getFieldName())) {
-            return null;
+            return IndexOrderTopK.tryWalk(steps, sortStep, dbName, collName, bound, context);
         }
         final var ids = RangeIdWalk.open(dbName, collName, range.bounds(), sortStep.getAscending(), bound, context);
         if (ids == null) {
             return null;
         }
+        final var skip = AggregationOperationHelper.skipAfter(steps, 1);
+        if (skip <= 0) {
+            return new IndexedSource.Fast(
+                    context.watch(fetchInOrder(ids, dbName, collName, bound, context).filter(range.matches())), 2);
+        }
+        context.tick(skipIds(ids, skip));
         return new IndexedSource.Fast(
-                context.watch(fetchInOrder(ids, dbName, collName, bound, context).filter(range.matches())), 2);
+                context.watch(fetchInOrder(ids, dbName, collName, bound - skip, context).filter(range.matches())), 3);
+    }
+
+    private static long skipIds(Iterator<String> ids, long skip) {
+        var skipped = 0L;
+        while (skipped < skip && ids.hasNext()) {
+            ids.next();
+            skipped++;
+        }
+        return skipped;
     }
 
     private static Stream<JsonObject> fetchInOrder(List<String> orderedIds, String dbName, String collName, long bound,
@@ -148,7 +189,7 @@ public final class SortOperatorHelper {
                 collName, bound, context);
     }
 
-    private static Comparator<FieldIndexEntry<?>> entryOrder(boolean ascending) {
+    static Comparator<FieldIndexEntry<?>> entryOrder(boolean ascending) {
         return (a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending);
     }
 

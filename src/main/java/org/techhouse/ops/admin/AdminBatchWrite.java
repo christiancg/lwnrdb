@@ -2,6 +2,7 @@ package org.techhouse.ops.admin;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +60,21 @@ final class AdminBatchWrite {
         for (final var chunk : chunks) {
             write(collName, rows, chunk, lines, List.of());
         }
-        write(collName, rows, last, lines, deleteIds);
+        write(collName, rows, last, lines, chunks.isEmpty() ? deleteIds : notInsertedBy(inserts, deleteIds));
+    }
+
+    private static List<String> notInsertedBy(List<? extends DbEntry> inserts, List<String> deleteIds) {
+        final var inserted = new HashSet<String>(inserts.size() * 2);
+        for (final var insert : inserts) {
+            inserted.add(insert.get_id());
+        }
+        final var stale = new ArrayList<String>(deleteIds.size());
+        for (final var id : deleteIds) {
+            if (!inserted.contains(id)) {
+                stale.add(id);
+            }
+        }
+        return stale;
     }
 
     static <T extends DbEntry> void write(String collName, PkRows rows, List<T> inserts,

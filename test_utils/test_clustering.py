@@ -3,7 +3,6 @@ import bisect
 import hashlib
 import json
 import os
-import signal
 import socket
 import struct
 import subprocess
@@ -13,11 +12,20 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from typing import Union
 
 import base_utils as bu
-from base_utils import (Conn, check, check_code, check_field, check_status, filter_step, holds_throughout, ids_of,
-                        section, wait_until)
+from base_utils import (
+    Conn,
+    check,
+    check_code,
+    check_field,
+    check_status,
+    filter_step,
+    holds_throughout,
+    ids_of,
+    section,
+    wait_until,
+)
 
 HOST = "127.0.0.1"
 BASE_CLIENT_PORT = int(os.environ.get("CLUSTER_TEST_CLIENT_PORT", "8991"))
@@ -135,7 +143,7 @@ def burst(port, script, count: int) -> list:
 
 class BackgroundOp:
 
-    def __init__(self, target: Union[Conn, int], payload: dict):
+    def __init__(self, target: Conn | int, payload: dict):
         self.response = None
         self._thread = threading.Thread(target=self._run, args=(target, payload), daemon=True)
         self._thread.start()
@@ -400,47 +408,52 @@ class Node:
         self.alive = False
         self._write_config()
 
-    def _write_config(self):
-        bu.write_config(
-            self.work_dir, self.client_port,
-            maxMemory="96mb",
-            clusterEnabled=True,
-            clusterPort=self.cluster_port,
-            clusterBindAddress="127.0.0.1",
-            clusterAdvertisedAddress="127.0.0.1",
-            clusterSeeds="" if self.index == 0 else f"{HOST}:{BASE_CLUSTER_PORT}",
-            clusterExpectedSize=3,
-            clusterSecret=CLUSTER_SECRET,
-            gossipIntervalMs=int(GOSSIP_INTERVAL_S * 1000),
-            suspectTimeoutMs=2000,
-            deadTimeoutMs=4000,
-            deadProbeIntervalMs=1000,
-            replicationAckTimeoutMs=5000,
-            virtualNodesPerNode=128,
-            readFallbackToLocal=True,
-            antiEntropyIntervalMs=int(ANTI_ENTROPY_INTERVAL_S * 1000),
-            tombstoneRetentionMs=86400000,
-            scriptsEnabled=True,
-            scriptTimeoutMs=20000,
-            scriptRoutingEnabled=self.index != 2,
-            scriptLocalityWeight=100 if self.index == 0 else 0,
-            maxConcurrentScriptsPerUser=0,
-            maxConcurrentScriptsPerDatabase=0,
-            triggersEnabled=True,
-            beforeHookInstructionBudget=200000,
-            beforeHookTimeoutMs=2000,
-            schedulesEnabled=True,
-            scheduleTickMs=200,
-            scheduleRefreshMs=2000,
-            scheduleTimeoutMs=10000,
-            faultInjectionEnabled=True,
-        )
+    def _write_config(self, **overrides):
+        settings = {
+            "maxMemory": "96mb",
+            "clusterEnabled": True,
+            "clusterPort": self.cluster_port,
+            "clusterBindAddress": "127.0.0.1",
+            "clusterAdvertisedAddress": "127.0.0.1",
+            "clusterSeeds": "" if self.index == 0 else f"{HOST}:{BASE_CLUSTER_PORT}",
+            "clusterExpectedSize": 3,
+            "clusterSecret": CLUSTER_SECRET,
+            "gossipIntervalMs": int(GOSSIP_INTERVAL_S * 1000),
+            "suspectTimeoutMs": 2000,
+            "deadTimeoutMs": 4000,
+            "deadProbeIntervalMs": 1000,
+            "replicationAckTimeoutMs": 5000,
+            "virtualNodesPerNode": 128,
+            "readFallbackToLocal": True,
+            "antiEntropyIntervalMs": int(ANTI_ENTROPY_INTERVAL_S * 1000),
+            "tombstoneRetentionMs": 86400000,
+            "scriptsEnabled": True,
+            "scriptTimeoutMs": 20000,
+            "scriptRoutingEnabled": self.index != 2,
+            "scriptLocalityWeight": 100 if self.index == 0 else 0,
+            "maxConcurrentScriptsPerUser": 0,
+            "maxConcurrentScriptsPerDatabase": 0,
+            "triggersEnabled": True,
+            "beforeHookInstructionBudget": 200000,
+            "beforeHookTimeoutMs": 2000,
+            "schedulesEnabled": True,
+            "scheduleTickMs": 200,
+            "scheduleRefreshMs": 2000,
+            "scheduleTimeoutMs": 10000,
+            "faultInjectionEnabled": True,
+        }
+        settings.update(overrides)
+        bu.write_config(self.work_dir, self.client_port, **settings)
+
+    def restart_with(self, **overrides):
+        self.stop()
+        self._write_config(**overrides)
+        self.start()
 
     def start(self):
-        log = open(self.log_path, "ab")
-        self.proc = subprocess.Popen(
-            bu.server_argv("1g"),
-            stdout=log, stderr=log, cwd=self.work_dir)
+        with open(self.log_path, "ab") as log:
+            self.proc = bu.spawn_server(bu.server_argv("1g"), stdout=log, stderr=log,
+                                        cwd=self.work_dir)
         deadline = time.time() + 60.0
         while time.time() < deadline:
             if bu.port_open(HOST, self.client_port):
@@ -472,15 +485,15 @@ class Node:
 
     def suspend(self):
         if self.proc is not None:
-            self.proc.send_signal(signal.SIGSTOP)
+            bu.suspend_process(self.proc)
 
     def resume(self):
         if self.proc is not None:
-            self.proc.send_signal(signal.SIGCONT)
+            bu.resume_process(self.proc)
 
     def stop(self):
         if self.proc is not None:
-            self.proc.terminate()
+            bu.terminate_server(self.proc)
             try:
                 self.proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
@@ -516,6 +529,22 @@ def test_formation_and_quorum_writes():
 
     check_status("SAVE reaches the replication quorum (not 503-2/503-3)",
                  op_with_retry(lambda: save(p0, DB, "docs", {"_id": "q1", "v": 1})), "OK")
+
+
+def test_server_info_reports_each_node():
+    section("SERVER_INFO describes the node it was sent to")
+
+    for node in nodes:
+        info = op(node.client_port, {"type": "SERVER_INFO"})
+        check_status(f"SERVER_INFO on node {node.index}", info, "OK")
+        server = info.get("server", {})
+        node_info = server.get("node", {})
+        check(f"node {node.index} is READY", server.get("state") == "READY", str(server))
+        check(f"node {node.index} names itself, not a peer", node_info.get("nodeId") == node_id_of(node),
+              str(node_info))
+        check(f"node {node.index} sees every member alive",
+              node_info.get("clusterEnabled") is True and node_info.get("aliveMembers") == NODE_COUNT
+              and node_info.get("expectedSize") == NODE_COUNT, str(node_info))
 
 
 RETRYABLE_CODES = {"503-2", "503-5", "503-9", "503-10"}
@@ -572,7 +601,8 @@ def test_write_replication_and_read_routing():
 
     for i in range(NODE_COUNT):
         _id = f"w{i}"
-        r = save(nodes[i].client_port, DB, "routed", {"_id": _id, "v": i * 10})
+        r = op_with_retry(lambda port=nodes[i].client_port, doc={"_id": _id, "v": i * 10}:
+                          save(port, DB, "routed", doc))
         check_status(f"SAVE via node-{i} commits", r, "OK")
         check(f"doc written via node-{i} is visible on every node",
                    all_nodes_see(DB, "routed", _id, i * 10),
@@ -582,13 +612,46 @@ def test_write_replication_and_read_routing():
     check_field("COUNT via node-2 reflects all cross-node writes", r, "results.0.count", NODE_COUNT)
 
 
+def insert(port, db, coll, obj):
+    return op(port, {"type": "SAVE", "databaseName": db, "collectionName": coll, "failOnUpdate": True, "object": obj})
+
+
+def test_fail_on_update_is_decided_by_the_owner():
+    section("SAVE with failOnUpdate is decided by the owner, whichever node receives it")
+
+    create_coll(nodes[0].client_port, DB, "insert_only")
+
+    r = op_with_retry(lambda: insert(nodes[0].client_port, DB, "insert_only", {"_id": "once", "v": 1}))
+    check_status("an insert via node-0 commits", r, "OK")
+    check("the inserted doc is visible on every node", all_nodes_see(DB, "insert_only", "once", 1))
+    for i in range(1, NODE_COUNT):
+        r = op_with_retry(lambda port=nodes[i].client_port: insert(port, DB, "insert_only", {"_id": "once", "v": 9}))
+        check_code(f"a second insert of the id via node-{i} -> 409-18", r, "ERROR", "409-18")
+    check("every node still holds the first body", all_nodes_see(DB, "insert_only", "once", 1))
+
+    conn = authed(nodes[1].client_port)
+    try:
+        check_status("START_TRANSACTION via node-1", conn.send({"type": "START_TRANSACTION"}), "OK")
+        check_code("a transactional insert of the committed id -> 409-18", conn.send(
+            {"type": "SAVE", "databaseName": DB, "collectionName": "insert_only", "failOnUpdate": True,
+             "object": {"_id": "once", "v": 5}}), "ERROR", "409-18")
+        check_status("a transactional insert of a new id", conn.send(
+            {"type": "SAVE", "databaseName": DB, "collectionName": "insert_only", "failOnUpdate": True,
+             "object": {"_id": "twice", "v": 2}}), "OK")
+        check_status("COMMIT_TRANSACTION", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    finally:
+        conn.close()
+    check("the transactional insert is visible on every node", all_nodes_see(DB, "insert_only", "twice", 2))
+    check("and the refused one changed nothing", all_nodes_see(DB, "insert_only", "once", 1))
+
+
 def test_bulk_delete_and_upsert():
     section("BULK_SAVE / DELETE / upsert replication")
 
     create_coll(nodes[0].client_port, DB, "bulk")
 
-    r = bulk_save(nodes[1].client_port, DB, "bulk",
-                  [{"_id": "b1", "v": 1}, {"_id": "b2", "v": 2}, {"_id": "b3", "v": 3}])
+    r = op_with_retry(lambda: bulk_save(nodes[1].client_port, DB, "bulk",
+                                        [{"_id": "b1", "v": 1}, {"_id": "b2", "v": 2}, {"_id": "b3", "v": 3}]))
     check_status("BULK_SAVE via node-1 commits", r, "OK")
     check("all bulk docs are visible on every node",
                all_nodes_see(DB, "bulk", "b1", 1) and all_nodes_see(DB, "bulk", "b2", 2)
@@ -635,6 +698,46 @@ def test_bulk_delete_and_upsert():
                                   seconds=ANTI_ENTROPY_INTERVAL_S * 2)
     check("anti-entropy sweeps do not append a tombstone a node already holds", reappended,
           f"tombstone lines: {[tombstone_line_count(n, DB, 'bulk') for n in nodes]}")
+
+    owner = owner_of(nodes[0].client_port, DB, "bulk")
+    check("the bulk collection's owner is known", owner is not None)
+    if owner is None:
+        return
+    forwarder = next(n for n in nodes if n.alive and n is not owner)
+    doomed = [{"_id": f"cd{i:02d}", "fate": "doomed" if i % 2 == 0 else "kept"} for i in range(20)]
+    check_status("BULK_SAVE a batch for a conditional delete",
+                 op_with_retry(lambda: bulk_save(nodes[1].client_port, DB, "bulk", doomed)), "OK")
+    check("the conditional batch is on every node", all_nodes_see(DB, "bulk", "cd19", "kept", field="fate"))
+    reply = op_with_retry(lambda: op(forwarder.client_port, {
+        "type": "DELETE", "databaseName": DB, "collectionName": "bulk",
+        "condition": {"fieldOperatorType": "EQUALS", "field": "fate", "value": "doomed"}}))
+    check_status("a DELETE with a condition sent to a non-owner is forwarded and commits", reply, "OK")
+    check_field("it reports the ten doomed documents", reply, "deletedCount", 10)
+    doomed_ids = {d["_id"] for d in doomed if d["fate"] == "doomed"}
+    kept_ids = {d["_id"] for d in doomed if d["fate"] == "kept"}
+    check("no node holds a doomed document and every node holds the kept ones", wait_until(
+        lambda: all(not doomed_ids & set(stored_documents(n, DB, "bulk"))
+                    and kept_ids <= set(stored_documents(n, DB, "bulk")) for n in nodes), timeout_s=15.0))
+    check("every node holds a tombstone for each doomed id", wait_until(
+        lambda: all(doomed_ids <= tombstone_ids(n, DB, "bulk") for n in nodes), timeout_s=15.0))
+
+    marked = [{"_id": f"cu{i:02d}", "batch": "cu", "phase": "new" if i % 2 == 0 else "old", "keep": i}
+              for i in range(10)]
+    check_status("BULK_SAVE a batch for a conditional save",
+                 op_with_retry(lambda: bulk_save(nodes[1].client_port, DB, "bulk", marked)), "OK")
+    check("the conditional save batch is on every node", all_nodes_see(DB, "bulk", "cu09", "old", field="phase"))
+    reply = op_with_retry(lambda: op(forwarder.client_port, {
+        "type": "SAVE", "databaseName": DB, "collectionName": "bulk",
+        "condition": {"fieldOperatorType": "EQUALS", "field": "phase", "value": "new"},
+        "object": {"phase": "promoted"}}))
+    check_status("a SAVE with a condition sent to a non-owner is forwarded and commits", reply, "OK")
+    check_field("it reports the five promoted documents", reply, "updatedCount", 5)
+    check("every node sees the merge on a promoted document", all_nodes_see(DB, "bulk", "cu08", "promoted",
+                                                                           field="phase"))
+    check("every node keeps the untouched field of a promoted document", all_nodes_see(DB, "bulk", "cu08", 8,
+                                                                                      field="keep"))
+    check("every node still sees an unmatched document unchanged", all_nodes_see(DB, "bulk", "cu07", "old",
+                                                                                field="phase"))
 
 
 def test_concurrent_writers_on_one_owner_share_replication_and_replicas_converge():
@@ -767,9 +870,45 @@ def _rows_read_their_own_record(node, coll) -> bool:
     for doc_id, position, length, page, _version in bu.read_pk_rows(_pk_path(node, coll)):
         with open(os.path.join(folder, f"{coll}-{page}.dat"), "rb") as fp:
             fp.seek(position)
-            if not fp.read(length).startswith(f'{{"_id":"{doc_id}"'.encode("utf-8")):
+            if not fp.read(length).startswith(f'{{"_id":"{doc_id}"'.encode()):
                 return False
     return True
+
+
+def test_a_snapshot_on_a_replica_keeps_the_versions_replicated_writes_replace():
+    section("A snapshot opened on a replica reads its cut while the owner's writes replicate into it")
+    coll = "snapshotted"
+    create_coll(nodes[0].client_port, DB, coll)
+    for _id, value in (("s1", 1), ("s2", 2)):
+        check_status(f"SAVE {_id}", op_with_retry(lambda d={"_id": _id, "v": value}:
+                                                  save(nodes[0].client_port, DB, coll, d)), "OK")
+    check("the seed is on every node", all_nodes_see(DB, coll, "s1", 1) and all_nodes_see(DB, coll, "s2", 2))
+    owner = owner_of(nodes[0].client_port, DB, coll)
+    check("the collection's owner is known", owner is not None)
+    if owner is None:
+        return
+    replica = next(n for n in nodes if n is not owner)
+    conn = authed(replica.client_port)
+    try:
+        started = conn.send({"type": "START_SNAPSHOT", "databaseName": DB, "collectionNames": [coll]})
+        check_status("START_SNAPSHOT on the replica", started, "OK")
+        snapshot_id = started.get("snapshotId")
+        check_status("update s1 through the owner", op_with_retry(
+            lambda: save(owner.client_port, DB, coll, {"_id": "s1", "v": 100})), "OK")
+        check_status("delete s2 through the owner", delete(owner.client_port, DB, coll, "s2"), "OK")
+        check_status("insert s3 through the owner", op_with_retry(
+            lambda: save(owner.client_port, DB, coll, {"_id": "s3", "v": 3})), "OK")
+        check("the writes reached the replica", all_nodes_see(DB, coll, "s1", 100) and all_nodes_see(DB, coll, "s3", 3))
+        page = conn.send({"type": "READ_SNAPSHOT", "databaseName": DB, "collectionName": coll,
+                          "snapshotId": snapshot_id, "limit": 10})
+        check_status("READ_SNAPSHOT on the replica", page, "OK")
+        check("it reads the versions the replicated writes replaced, and not the insert",
+              [(d.get("_id"), d.get("v")) for d in page.get("results") or []] == [("s1", 1), ("s2", 2)],
+              json.dumps(page.get("results")))
+        check_status("RELEASE_SNAPSHOT on the replica", conn.send({"type": "RELEASE_SNAPSHOT", "databaseName": DB,
+                                                                   "snapshotId": snapshot_id}), "OK")
+    finally:
+        conn.close()
 
 
 def test_reindex_primary_key_rebuilds_the_pk_index_on_every_node():
@@ -884,6 +1023,32 @@ def test_password_change_deauthenticates_sessions_on_every_node():
     finally:
         for session in sessions:
             session.close()
+    op(port, {"type": "DELETE_USER", "username": username})
+
+
+def test_a_replicated_password_change_stops_the_old_password_on_a_replica():
+    section("A password changed through another node stops a password the replica already accepted")
+
+    username = "cluster_pw_verifier"
+    old_password = "cluster_verifier_old1"
+    new_password = "cluster_verifier_new1"
+    port = nodes[0].client_port
+    replica = nodes[2].client_port
+    op(port, {"type": "DELETE_USER", "username": username})
+    check_status("CREATE_USER via node-0", op(port, {
+        "type": "CREATE_USER", "username": username, "password": old_password, "admin": False,
+        "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {}}), "OK")
+    check("the user authenticates on node-2",
+          wait_until(lambda: _authenticates(replica, username, old_password), timeout_s=15.0))
+    check_status("a repeated AUTHENTICATE on node-2 succeeds", as_user(replica, username, old_password), "OK")
+
+    check_status("admin changes the password through node-1", op(nodes[1].client_port, {
+        "type": "SET_PASSWORD", "username": username, "newPassword": new_password}), "OK")
+    check("the new password reaches node-2",
+          wait_until(lambda: _authenticates(replica, username, new_password), timeout_s=15.0))
+    check_code("the old password fails on node-2 once the change replicated",
+               as_user(replica, username, old_password), "ERROR", "401-3")
+    check_status("the new password authenticates again on node-2", as_user(replica, username, new_password), "OK")
     op(port, {"type": "DELETE_USER", "username": username})
 
 
@@ -1035,7 +1200,7 @@ class PeerSession:
     def closed_without_reply(self) -> bool:
         try:
             return self.sock.recv(1) == b""
-        except (ConnectionResetError, socket.timeout):
+        except (TimeoutError, ConnectionResetError):
             return True
 
     def close(self):
@@ -2310,25 +2475,31 @@ def test_a_participant_killed_mid_commit_finishes_without_its_coordinator():
                                                          timeout_s=60.0))
 
 
-def tombstone_line_count(node, db, coll) -> int:
+def live_tombstone_lines(node, db, coll) -> list:
     path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
     if not os.path.isfile(path):
-        return 0
-    with open(path, encoding="utf-8") as fp:
-        return sum(1 for line in fp if line.strip())
-
-
-def tombstone_ids(node, db, coll):
-    path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
-    if not os.path.isfile(path):
-        return set()
-    ids = set()
+        return []
+    entries, retracted = [], set()
     with open(path, encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
-            if line and "\x1f" in line:
-                ids.add(bu.unescape_index_token(line.split("\x1f", 1)[0]))
-    return ids
+            if not line or "\x1f" not in line:
+                continue
+            escaped, version = line.split("\x1f", 1)
+            key = bu.unescape_index_token(escaped)
+            if version.startswith("-"):
+                retracted.add((key, version[1:]))
+            else:
+                entries.append((key, version))
+    return [entry for entry in entries if entry not in retracted]
+
+
+def tombstone_line_count(node, db, coll) -> int:
+    return len(live_tombstone_lines(node, db, coll))
+
+
+def tombstone_ids(node, db, coll):
+    return {key for key, _ in live_tombstone_lines(node, db, coll)}
 
 
 def test_a_fresh_tombstone_survives_anti_entropy_sweeps():
@@ -2461,6 +2632,52 @@ def timed_saves(conn: Conn, coll: str, count: int, generation: int) -> float:
     return time.perf_counter() - started
 
 
+REFUSED_PK_COLL = "replica_refused_pk"
+REFUSED_PK_DOCS = int(os.environ.get("CLUSTER_TEST_REFUSED_PK_DOCS", "20000"))
+REFUSED_PK_BATCH = 500
+REFUSED_PK_CONVERGE_S = 20.0
+
+
+def test_replica_with_refused_pk_applies_batches():
+    section(f"A replica whose pk index does not fit its cache applies replicated batches ({REFUSED_PK_DOCS} docs)")
+    port = nodes[0].client_port
+    check_status("CREATE_COLLECTION", op_with_retry(lambda: create_coll(port, DB, REFUSED_PK_COLL)), "OK")
+    owner = owner_of(port, DB, REFUSED_PK_COLL)
+    if not check("the collection has a live owner", owner is not None):
+        return
+    replica = next(n for n in nodes if n is not owner)
+    print(f"  Restarting replica node-{replica.index} with maxMemory=1mb ...")
+    replica.restart_with(maxMemory="1mb")
+    try:
+        check("the cluster is healthy with the small-cache replica", wait_until_cluster_is_healthy())
+        docs = [{"_id": f"rp{i:06d}", "v": 1} for i in range(REFUSED_PK_DOCS)]
+        loaded = all(bulk_save(owner.client_port, DB, REFUSED_PK_COLL,
+                               docs[at:at + REFUSED_PK_BATCH]).get("status") == "OK"
+                     for at in range(0, REFUSED_PK_DOCS, REFUSED_PK_BATCH))
+        check(f"{REFUSED_PK_DOCS} documents are written through the owner", loaded)
+        started = time.time()
+        updated = all(bulk_save(owner.client_port, DB, REFUSED_PK_COLL,
+                                [dict(d, v=2) for d in docs[at:at + REFUSED_PK_BATCH]]).get("status") == "OK"
+                      for at in range(0, REFUSED_PK_DOCS, REFUSED_PK_BATCH))
+        check(f"every {REFUSED_PK_BATCH}-document update batch is acknowledged", updated)
+
+        def _replica_converged():
+            stored = stored_documents(replica, DB, REFUSED_PK_COLL)
+            return len(stored) == REFUSED_PK_DOCS and all(d.get("v") == 2 for d in stored.values())
+
+        converged = wait_until(_replica_converged, timeout_s=REFUSED_PK_CONVERGE_S, interval_s=1.0)
+        print(f"  the replica held every update {time.time() - started:.1f}s after the first batch was sent")
+        check(f"the replica applies every batch within {REFUSED_PK_CONVERGE_S:.0f}s", converged)
+        check("the replica's pk index was refused, so it served the version checks from pk.idx point scans",
+              f"primary-key index of {DB}|{REFUSED_PK_COLL} needs about" in bu.read_log(replica.log_path))
+        stale = [d["_id"] for d in docs[:50] if find_by_id(replica.client_port, DB, REFUSED_PK_COLL,
+                                                           d["_id"]).get("object", {}).get("v") != 2]
+        check("reads through the replica answer the updated values", not stale, f"stale: {stale[:5]}")
+    finally:
+        replica.restart_with()
+        check("the cluster is healthy once the replica runs its usual config again", wait_until_cluster_is_healthy())
+
+
 def test_replicated_saves_stay_fast_with_many_tombstones():
     section("Replicated saves do not slow down as a collection's tombstones grow")
     coll = "many_tombstones"
@@ -2550,8 +2767,12 @@ def test_a_prepared_participant_resolves_without_its_coordinator():
                  resolved, "OK")
 
     for coll in slices:
-        check(f"the resolved slice is readable in {coll}",
-              all_nodes_see(DB, coll, "dc", 1, ports=all_ports(), timeout_s=45.0))
+        if bu.WINDOWS and coll == owners[frozen.index][0]:
+            bu.warn(f"skipped the read of {coll}: a killed process resets its connections on Windows, so the frozen"
+                    " participant loses the PREPARE buffered for it and never holds the slice")
+        else:
+            check(f"the resolved slice is readable in {coll}",
+                  all_nodes_see(DB, coll, "dc", 1, ports=all_ports(), timeout_s=45.0))
         check(f"{coll} is writable again, so its write locks were released",
               wait_until(lambda name=coll: save(nodes[0].client_port, DB, name,
                                                 {"_id": "after_dc", "v": 1}).get("status") == "OK",
@@ -2732,6 +2953,45 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
           f"{ran} run(s) recorded")
 
 
+def exec_client(port: int, request: dict) -> subprocess.CompletedProcess:
+    with tempfile.TemporaryDirectory() as cwd:
+        return subprocess.run([*bu.client_argv(), "--exec", json.dumps(request), "--host", HOST, "--port",
+                               str(port), "--user", ADMIN_USERNAME], cwd=cwd, capture_output=True, timeout=300,
+                              env={**os.environ, "LWNRDB_PASSWORD": ADMIN_PASSWORD}, check=False)
+
+
+def test_the_client_does_not_resend_a_replication_timeout():
+    section("The jar client reports 503-3 for a SAVE without an _id instead of resending it")
+    owners = collections_by_owner(nodes[0].client_port, DB, "noresend", count=3)
+    if not check("found the owner of a fresh collection", bool(owners), f"owners={owners}"):
+        return
+    host_index, names = next(iter(owners.items()))
+    host = nodes[host_index]
+    coll = names[0]
+    frozen = [node for node in nodes if node is not host]
+    marker = None
+    for attempt in range(5):
+        candidate = f"noresend-{attempt}"
+        for node in frozen:
+            node.suspend()
+        try:
+            ran = exec_client(host.client_port, {"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                                                 "object": {"marker": candidate}})
+        finally:
+            for node in frozen:
+                node.resume()
+            wait_until_cluster_is_healthy()
+        if b"503-3" in ran.stdout:
+            marker = candidate
+            break
+    if not check("the client's SAVE timed out on its replication quorum, so the case under test was reached",
+                 marker is not None, "the peers kept acknowledging within replicationAckTimeoutMs"):
+        return
+    stored = ids_of(aggregate(host.client_port, DB, coll, [filter_step("marker", "EQUALS", marker)]))
+    check("exactly one document holds the marker, so the client did not resend the committed write",
+          len(stored) == 1, f"stored={stored}")
+
+
 STARTUP_REPLAY_SETTLE_S = 10
 
 
@@ -2748,6 +3008,56 @@ def reset_connection(port: int):
     sock.close()
 
 
+CLUSTER_DELETE_DOCUMENTS = 400
+CLUSTER_DELETE_WRITERS = 8
+CLUSTER_DELETE_MAX_SECONDS = 60.0
+
+
+def test_cluster_delete_batch_forces_once():
+    section("Concurrent DELETEs on one owner share their tombstone force and leave one tombstone per id everywhere")
+    coll = "delete_batches"
+    check_status("create the collection", op_with_retry(lambda: create_coll(nodes[0].client_port, DB, coll)), "OK")
+    owner = owner_of(nodes[0].client_port, DB, coll)
+    if not check("the collection's owner is known", owner is not None):
+        return
+    documents = [{"_id": f"del{i:04d}", "v": i} for i in range(CLUSTER_DELETE_DOCUMENTS)]
+    check_status("BULK_SAVE the documents to delete", bulk_save(owner.client_port, DB, coll, documents), "OK")
+    check("the documents reached every node", all_nodes_see(DB, coll, documents[-1]["_id"], documents[-1]["v"]))
+    failures = []
+
+    def deleter(number: int):
+        conn = authed(owner.client_port)
+        try:
+            for document in documents[number::CLUSTER_DELETE_WRITERS]:
+                reply = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": coll,
+                                   "_id": document["_id"]})
+                if reply.get("status") != "OK":
+                    failures.append(reply)
+        finally:
+            conn.close()
+
+    started = time.time()
+    threads = [threading.Thread(target=deleter, args=(number,)) for number in range(CLUSTER_DELETE_WRITERS)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(CLUSTER_DELETE_MAX_SECONDS * 2)
+    elapsed = time.time() - started
+    print(f"  {CLUSTER_DELETE_DOCUMENTS} clustered deletes on {CLUSTER_DELETE_WRITERS} connections took "
+          f"{elapsed:.2f}s ({CLUSTER_DELETE_DOCUMENTS / max(elapsed, 0.001):.0f}/s)")
+    check("every concurrent delete on the owner was acknowledged", not failures, f"failures: {failures[:3]}")
+    check(f"the deletes finish within {CLUSTER_DELETE_MAX_SECONDS:.0f}s", elapsed < CLUSTER_DELETE_MAX_SECONDS,
+          f"took {elapsed:.1f}s")
+    deleted = {document["_id"] for document in documents}
+    check("every node holds each deleted id's tombstone exactly once", wait_until(
+        lambda: all(tombstone_ids(n, DB, coll) == deleted and tombstone_line_count(n, DB, coll) == len(deleted)
+                    for n in nodes), timeout_s=30.0),
+          f"tombstone lines: {[tombstone_line_count(n, DB, coll) for n in nodes]}")
+    check("no node holds a deleted document",
+          wait_until(lambda: all(not stored_documents(n, DB, coll) for n in nodes), timeout_s=30.0),
+          f"left: {[len(stored_documents(n, DB, coll)) for n in nodes]}")
+
+
 def test_cluster_port_reset_flood_is_rate_limited():
     section(f"{CLUSTER_RESET_FLOOD} resets on the cluster port are rate-limited to ~{CLUSTER_LOG_RATE_PER_SECOND}/s")
     victim = nodes[0]
@@ -2760,11 +3070,29 @@ def test_cluster_port_reset_flood_is_rate_limited():
     elapsed = time.time() - start
     logged = bu.read_log(victim.log_path).count(marker) - before
     ceiling = CLUSTER_LOG_RATE_PER_SECOND * (int(elapsed) + 2)
-    check(f"the reset flood was rate-limited, not one line per reset",
+    check("the reset flood was rate-limited, not one line per reset",
           logged < ceiling and logged < CLUSTER_RESET_FLOOD,
           f"{logged} lines for {CLUSTER_RESET_FLOOD} resets in {elapsed:.1f}s (ceiling {ceiling})")
     with Conn(port=victim.client_port) as conn:
         check_status("the node still serves clients", conn.authenticate(), "OK")
+
+
+def test_a_malformed_peer_frame_does_not_drop_the_connection():
+    section("A malformed peer frame after HELLO is skipped and the next frame on the connection is answered")
+    victim = nodes[0]
+    marker = "Skipped a malformed cluster frame"
+    before = bu.read_log(victim.log_path).count(marker)
+    session = PeerSession(victim)
+    try:
+        session.write_line('{"type":"GOSSIP","secret":')
+        session.write_line("{}")
+        ack = session.frame({"type": "GOSSIP"})
+        check("the gossip after the malformed frames is answered on the same connection",
+              ack.get("type") == "GOSSIP_ACK", f"got {ack}")
+    finally:
+        session.close()
+    check("the skipped frames are logged", wait_until(
+        lambda: bu.read_log(victim.log_path).count(marker) - before >= 2, timeout_s=10.0))
 
 
 def test_a_trigger_writing_only_to_another_owner_consumes_its_run():
@@ -2848,7 +3176,7 @@ def test_an_escaped_trigger_depth_does_not_suppress_the_owners_trigger():
         finally:
             conn.close()
         check(f"the owner's trigger still ran for {doc_id}",
-              wait_until(lambda: runs_marked(host, marks, doc_id) >= 1, timeout_s=30.0))
+              wait_until(lambda doc_id=doc_id: runs_marked(host, marks, doc_id) >= 1, timeout_s=30.0))
 
 
 SCHEDULE_DB = DB
@@ -3189,6 +3517,35 @@ def test_schedule_replication_and_single_firing():
                                       for n in nodes if n.alive), timeout_s=20.0))
 
 
+
+def schedule_file(node, name, db=SCHEDULE_DB) -> str:
+    return os.path.join(node.work_dir, "db", db, ".schedules", f"{name}.json")
+
+
+def test_a_resurrected_schedule_is_healed():
+    section("Admin records — a deleted schedule written back on one node is removed by the next admin rounds")
+    name = "zombie"
+    revived = nodes[1]
+    check_status("save the schedule via node-0", save_schedule(nodes[0].client_port, name, "sched_marks"), "OK")
+    check("the schedule reaches node-1",
+          wait_until(lambda: os.path.isfile(schedule_file(revived, name)), timeout_s=20.0))
+    with open(schedule_file(revived, name), "rb") as fp:
+        saved = fp.read()
+
+    check_status("delete the schedule", delete_schedule(nodes[0].client_port, name), "OK")
+    check("the deletion replicates to every node",
+          wait_until(lambda: all(name not in schedule_names(n.client_port) for n in nodes if n.alive),
+                     timeout_s=20.0))
+
+    descriptor = os.open(schedule_file(revived, name), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "wb") as fp:
+        fp.write(saved)
+    check("node-1 serves the written-back schedule", name in schedule_names(revived.client_port))
+    check("an admin round removes it again, because its own tombstone is newer",
+          wait_until(lambda: name not in schedule_names(revived.client_port),
+                     timeout_s=4 * ANTI_ENTROPY_INTERVAL_S),
+          detail=str(schedule_names(revived.client_port)))
+
 def test_schedule_failover():
     section("Scheduled procedures — a schedule owned by the dead node fails over")
 
@@ -3347,6 +3704,72 @@ def test_drop_database_then_rejoin_then_recreate_does_not_resurrect_documents():
     _drop_recreate_scenario("rejoin_first_db", "rejoin_first_dbcoll", "database", rejoin_first=True)
 
 
+def admin_tombstone_lines(node) -> list:
+    path = os.path.join(node.work_dir, "db", "cluster", "admin-tombstones.idx")
+    if not os.path.isfile(path):
+        return []
+    lines = []
+    with open(path, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if line and "\x1f" in line:
+                key, version = line.split("\x1f", 1)
+                lines.append((bu.unescape_index_token(key), int(version)))
+    return lines
+
+
+def admin_tombstones(node) -> dict:
+    highest = {}
+    for key, version in admin_tombstone_lines(node):
+        highest[key] = max(version, highest.get(key, 0))
+    return highest
+
+
+def test_admin_tombstone_snapshot_ships_differences():
+    section("Admin tombstones keep one line per name, and a node that missed drops merges what differs")
+    port = nodes[0].client_port
+    churn = "admin_churn"
+    cycles = max(6, len(admin_tombstones(nodes[0])) + 2)
+    for cycle in range(cycles):
+        check_status(f"CREATE_DATABASE {churn} (cycle {cycle + 1}/{cycles})",
+                     op_with_retry(lambda: create_db(port, churn)), "OK")
+        check_status(f"DROP_DATABASE {churn} (cycle {cycle + 1}/{cycles})",
+                     op_with_retry(lambda: drop_db(port, churn)), "OK")
+    churn_key = f"database|{churn}|{churn}"
+    check("every node holds the dropped name's tombstone at one version",
+          wait_until(lambda: len({admin_tombstones(n).get(churn_key) for n in nodes}) == 1
+                     and admin_tombstones(nodes[0]).get(churn_key) is not None, timeout_s=30.0),
+          f"versions: {[admin_tombstones(n).get(churn_key) for n in nodes]}")
+    for n in nodes:
+        compacted = wait_until(lambda node=n: len(admin_tombstone_lines(node)) < 2 * len(admin_tombstones(node)),
+                               timeout_s=10.0)
+        lines, keys = len(admin_tombstone_lines(n)), len(admin_tombstones(n))
+        check(f"node-{n.index} keeps fewer than two lines per admin tombstone after {cycles} drops of one name",
+              compacted, f"{lines} lines for {keys} keys")
+
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} so it misses the next drops ...")
+    victim.kill()
+    check("the ring settles without it", wait_until_cluster_is_healthy())
+    missed = [f"admin_missed_{i}" for i in range(3)]
+    for name in missed:
+        check(f"CREATE_DATABASE {name} without node-{victim.index}",
+              wait_until(lambda n=name: create_db(port, n).get("status") == "OK", timeout_s=60.0, interval_s=1.0))
+        check(f"DROP_DATABASE {name} without node-{victim.index}",
+              wait_until(lambda n=name: drop_db(port, n).get("status") == "OK", timeout_s=60.0, interval_s=1.0))
+    print(f"  Restarting node-{victim.index} ...")
+    victim.start()
+    check("the restarted node merges the tombstones it missed",
+          wait_until(lambda: all(f"database|{gone}|{gone}" in admin_tombstones(victim) for gone in missed),
+                     timeout_s=60.0, interval_s=1.0),
+          f"node-{victim.index} holds {sorted(admin_tombstones(victim))}")
+    check("every node ends with the same admin tombstones",
+          wait_until(lambda: admin_tombstones(nodes[0]) == admin_tombstones(nodes[1]) == admin_tombstones(victim),
+                     timeout_s=60.0, interval_s=1.0),
+          f"differing keys: {sorted(set(admin_tombstones(nodes[0]).items()) ^ set(admin_tombstones(victim).items()))}")
+    check("the cluster is healthy again", wait_until_cluster_is_healthy())
+
+
 def test_a_node_that_missed_the_last_database_drop_converges():
     section("A node that missed the drop of the cluster's last database merges the database tombstones")
     victim = nodes[2]
@@ -3465,8 +3888,8 @@ class MigrationNode(Node):
         self.clustered = False
         super().__init__(index, base_dir)
 
-    def _write_config(self):
-        super()._write_config()
+    def _write_config(self, **overrides):
+        super()._write_config(**overrides)
         path = os.path.join(self.work_dir, "lwnrdb.cfg")
         with open(path) as fp:
             lines = fp.read().splitlines()
@@ -3795,6 +4218,34 @@ def test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared():
         restore_after_fault_test()
 
 
+def test_a_forwarded_read_the_owner_does_not_answer_is_retryable_not_served_locally():
+    section("Fault seam: a forwarded read whose answer the owner drops is a retryable 503-4, not the local copy")
+
+    owners = owned_by_every_node("faultread")
+    if owners is None:
+        return
+    edge, owner = nodes[2], nodes[1]
+    coll = owners[owner.index][0]
+    point = "PEER_REPLY"
+    try:
+        if not check("the ring is healthy before the read", wait_until_cluster_is_healthy()):
+            return
+        check_status("a write through a node that does not own the collection",
+                     save(edge.client_port, DB, coll, {"_id": "slow_read", "v": 1}), "OK")
+        if not check("every node holds the document, the edge's local copy included",
+                     all_nodes_see(DB, coll, "slow_read", 1, ports=all_ports(), timeout_s=30.0)):
+            return
+        check_status("ARM_FAULT drops the owner's next answer to a forwarded request",
+                     arm_fault(owner, point, "DROP", match="FORWARD_REQUEST"), "OK")
+        check_code("the edge answers 503-4 rather than reading its own copy",
+                   find_by_id(edge.client_port, DB, coll, "slow_read"), "ERROR", "503-4")
+        check_status("the owner ran the read and dropped its answer", await_fault(owner, point, 5000), "OK")
+        r = find_by_id(edge.client_port, DB, coll, "slow_read")
+        check("a retry is answered by the owner", r.get("status") == "OK" and bu.dig(r, "object.v") == 1, str(r))
+    finally:
+        restore_after_fault_test()
+
+
 def test_a_participant_halted_between_its_commit_markers_is_not_left_in_doubt():
     section("Fault seam: a participant halted between its decided marker and dropping its prepared one")
 
@@ -3947,17 +4398,21 @@ def test_a_write_inside_an_anti_entropy_round_trip_is_not_undone():
 GROUPS = {
     "replication": [
         test_formation_and_quorum_writes,
+        test_server_info_reports_each_node,
         test_ddl_replication,
         test_write_replication_and_read_routing,
+        test_fail_on_update_is_decided_by_the_owner,
         test_bulk_delete_and_upsert,
         test_concurrent_writers_on_one_owner_share_replication_and_replicas_converge,
         test_index_replication,
         test_reindex_rebuilds_the_index_on_every_node,
         test_reindex_primary_key_rebuilds_the_pk_index_on_every_node,
+        test_a_snapshot_on_a_replica_keeps_the_versions_replicated_writes_replace,
         test_user_and_permission_replication,
         test_grants_are_pruned_on_every_node,
         test_a_deleted_users_ownership_is_pruned_on_every_node,
         test_password_change_deauthenticates_sessions_on_every_node,
+        test_a_replicated_password_change_stops_the_old_password_on_a_replica,
         test_a_client_cannot_advance_the_write_clock_through_an_incarnation,
         test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates,
         test_forged_peer_frames_are_refused,
@@ -3972,6 +4427,7 @@ GROUPS = {
         test_an_unreadable_definition_is_not_deleted_on_peers,
         test_forwarded_write_ignores_a_client_supplied_trigger_depth,
         test_an_escaped_trigger_depth_does_not_suppress_the_owners_trigger,
+        test_replica_with_refused_pk_applies_batches,
     ],
     "scripts": [
         test_formation_and_quorum_writes,
@@ -3994,6 +4450,7 @@ GROUPS = {
         test_formation_and_quorum_writes,
         test_write_replication_and_read_routing,
         test_schedule_replication_and_single_firing,
+        test_a_resurrected_schedule_is_healed,
         arrange_admin_changes_for_a_downed_node,
         test_node_failure_quorum_maintained,
         test_schedule_failover,
@@ -4019,6 +4476,7 @@ GROUPS = {
         test_a_node_halted_between_a_tombstone_and_its_delete_converges,
         test_a_replica_halted_between_its_batch_tombstones_and_deletes_converges,
         test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared,
+        test_a_forwarded_read_the_owner_does_not_answer_is_retryable_not_served_locally,
         test_a_participant_halted_between_its_commit_markers_is_not_left_in_doubt,
         test_a_coordinator_halted_after_its_decision_record_recovers,
         test_a_write_inside_an_anti_entropy_round_trip_is_not_undone,
@@ -4026,8 +4484,11 @@ GROUPS = {
         test_a_post_prepare_write_survives_2pc_recovery,
         test_a_participant_killed_mid_commit_finishes_without_its_coordinator,
         test_a_trigger_fires_once_despite_a_replication_timeout,
+        test_the_client_does_not_resend_a_replication_timeout,
         test_a_trigger_writing_only_to_another_owner_consumes_its_run,
+        test_cluster_delete_batch_forces_once,
         test_cluster_port_reset_flood_is_rate_limited,
+        test_a_malformed_peer_frame_does_not_drop_the_connection,
     ],
     "recreate": [
         test_formation_and_quorum_writes,
@@ -4037,6 +4498,7 @@ GROUPS = {
         test_drop_database_then_rejoin_then_recreate_does_not_resurrect_documents,
         test_rapid_collection_creates_are_not_quarantined,
         test_recreating_an_existing_collection_keeps_its_documents,
+        test_admin_tombstone_snapshot_ships_differences,
         test_a_node_that_missed_the_last_database_drop_converges,
         test_a_populated_standalone_node_keeps_its_data_when_a_fresh_node_joins,
     ],

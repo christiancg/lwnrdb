@@ -1,0 +1,8 @@
+{
+  "area": "listen",
+  "cases": [
+    {"name":"listen.filter","request":{"type":"LISTEN","databaseName":"shop","collectionName":"orders","aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"status","value":"pending"}}]}},
+    {"name":"listen.all","request":{"type":"LISTEN","databaseName":"shop","collectionName":"orders","aggregationSteps":[]}},
+    {"name":"listen.stop","request":{"type":"STOP_LISTEN","listenId":"550e8400-e29b-41d4-a716-446655440000"}}
+  ]
+}

@@ -107,6 +107,20 @@ public class PageCompactStayTest {
     }
 
     @Test
+    public void test_a_refused_compaction_on_the_known_occupancy_path_appends() throws Exception {
+        final var rf = fixture(tmp, Globals.ADMIN_DB_NAME);
+        appendRaw(rf, hole(2000) + StorageFixture.record("stranger", "x"));
+        final var before = Files.readAllBytes(rf.fx.page(0).toPath());
+        final var rows = rf.fx.indexedRows();
+        final var known = new PageOccupancy(PageRows.liveBytes(rows), rows.size());
+
+        assertNull(rf.vacuum.vacuumIfNeeded(rf.fx.dbName, COLL, 0, APPENDED, null, rows, _ -> known));
+
+        assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
+        assertEquals(0, rf.fx.openIntents());
+    }
+
+    @Test
     public void test_a_refusal_at_the_cap_still_fails() throws Exception {
         final var rf = fixture(tmp, Globals.ADMIN_DB_NAME);
         appendRaw(rf, hole(5000) + StorageFixture.record("stranger", "x"));

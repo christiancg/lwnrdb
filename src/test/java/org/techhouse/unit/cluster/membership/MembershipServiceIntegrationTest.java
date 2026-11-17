@@ -74,6 +74,7 @@ public class MembershipServiceIntegrationTest {
         }
         server.stop();
         TestUtils.setPrivateField(config, "clusterSecret", origSecret);
+        TestUtils.resetMembership();
         TestUtils.setPrivateField(config, "clusterSeeds", origSeeds);
         TestUtils.setPrivateField(config, "nodeId", origNodeId);
         TestUtils.setPrivateField(config, "clusterAdvertisedAddress", origAdvertised);

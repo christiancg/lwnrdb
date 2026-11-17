@@ -1,0 +1,73 @@
+name: Release Python client
+on:
+  push:
+    tags:
+      - 'python-client-v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  verify:
+    name: Verify against the server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: clients/python/pyproject.toml
+      - name: Package the server jar from the same commit
+        working-directory: .
+        run: mvn -B --no-transfer-progress -DskipTests package
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev -e .
+      - name: Unit tests, coverage, style, types, API docs, build and consumers
+        run: python build_tools/verify.py
+      - name: Integration tests
+        run: LWNRDB_JAR="$GITHUB_WORKSPACE/target/lwnrdb.jar" python -m pytest tests/it -m it
+
+  publish:
+    name: Publish to PyPI
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    env:
+      VERSION: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Set the version from the tag
+        run: python build_tools/set_version.py "${VERSION#python-client-v}"
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --outdir dist .
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: clients/python/dist
+      - name: GitHub release
+        run: |
+          PRERELEASE=""
+          case "${VERSION#python-client-v}" in *[a-z]*) PRERELEASE="--prerelease" ;; esac
+          gh release create "${VERSION}" --title "Python client ${VERSION#python-client-v}" --generate-notes ${PRERELEASE}

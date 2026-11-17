@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
@@ -100,7 +101,7 @@ public class FieldIndexBatchLookupTest {
         final var spied = spy(realFs);
         TestUtils.setPrivateStaticField(Class.forName(SLOT_CLASS), "fs", spied);
         doThrow(new IOException("disk full")).when(spied).appendIndexLog(anyString(), anyString(), anyString(),
-                anyString(), any(), any());
+                anyString(), any(), any(), anyBoolean());
         final var object = new JsonObject();
         object.addProperty("_id", "a");
         object.addProperty(FIELD, "w");

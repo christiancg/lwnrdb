@@ -15,6 +15,7 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -33,7 +34,11 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -54,6 +59,10 @@ public class OperationProcessorBeforeHookTest {
     static void tearDown() throws Exception {
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
+        TestUtils.setPrivateField(configuration, "beforeHookInstructionBudget",
+                ConfigKey.BEFORE_HOOK_INSTRUCTION_BUDGET.defaultValue());
+        TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs",
+                ConfigKey.BEFORE_HOOK_TIMEOUT_MS.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -166,6 +175,19 @@ public class OperationProcessorBeforeHookTest {
     }
 
     @Test
+    public void test_an_insert_refused_for_an_existing_id_runs_no_hook() throws Exception {
+        assertEquals(OperationStatus.OK, save("taken").getStatus());
+        installHook("veto", "veto", "export default (d) => { throw new Error('hooked'); };", EventType.CREATED,
+                EventType.UPDATED);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document("taken"));
+        request.set_id("taken");
+        request.setFailOnUpdate(true);
+
+        assertEquals(ErrorCode.DOCUMENT_ALREADY_EXISTS.getCode(), processor.processMessage(request).getErrorCode());
+    }
+
+    @Test
     public void test_a_compliant_write_still_succeeds_after_a_rejection() throws Exception {
         installHook("veto", "veto", "export default (d) => { if (d.qty > 1) { throw new Error('too many'); } };",
                 EventType.CREATED, EventType.UPDATED);
@@ -243,6 +265,90 @@ public class OperationProcessorBeforeHookTest {
         request.set_id("d2");
         assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
         assertNull(find("d2"));
+    }
+
+    private org.techhouse.ops.resp.OperationResponse deleteWhereQtyIsTwo() {
+        final var request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setCondition(new FieldOperator(FieldOperatorType.EQUALS, "qty", new JsonNumber(2)));
+        return processor.processMessage(request);
+    }
+
+    @Test
+    public void test_a_hook_rejecting_one_match_rejects_the_whole_conditional_delete() throws Exception {
+        for (final var id : List.of("w1", "w2", "w3")) {
+            assertEquals(OperationStatus.OK, save(id).getStatus());
+        }
+        installHook("lock", "lock", "export default (d) => { if (d._id === 'w2') { throw new Error('locked'); } };",
+                EventType.DELETED);
+
+        assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(), deleteWhereQtyIsTwo().getErrorCode());
+
+        for (final var id : List.of("w1", "w2", "w3")) {
+            assertNotNull(find(id), id + " must survive a rejected conditional delete");
+        }
+    }
+
+    @Test
+    public void test_hooks_see_every_matched_document_of_a_conditional_delete() throws Exception {
+        for (final var id : List.of("v1", "v2")) {
+            assertEquals(OperationStatus.OK, save(id).getStatus());
+        }
+        installHook("check", "check", "export default (d) => { if (d.price !== 10) { throw new Error('bad'); } };",
+                EventType.DELETED);
+
+        final var response = deleteWhereQtyIsTwo();
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertTrue(((DeleteManyResponse) response).getDeletedCount() >= 2);
+        assertNull(find("v1"));
+        assertNull(find("v2"));
+    }
+
+    private org.techhouse.ops.resp.OperationResponse saveWhereQtyIsTwo(JsonObject patch) {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setCondition(new FieldOperator(FieldOperatorType.EQUALS, "qty", new JsonNumber(2)));
+        request.setObject(patch);
+        return processor.processMessage(request);
+    }
+
+    @Test
+    public void test_hooks_see_and_rewrite_the_merged_documents_of_a_conditional_save() throws Exception {
+        for (final var id : List.of("m1", "m2")) {
+            assertEquals(OperationStatus.OK, save(id).getStatus());
+        }
+        installHook("calc", "calc", "export default (d) => ({ ...d, total: d.qty * d.price });", EventType.UPDATED);
+        final var patch = new JsonObject();
+        patch.add("price", new JsonNumber(5));
+
+        final var response = saveWhereQtyIsTwo(patch);
+
+        assertTrue(((SaveWhereResponse) response).getUpdatedCount() >= 2);
+        for (final var id : List.of("m1", "m2")) {
+            final var document = find(id);
+            assertNotNull(document, id);
+            assertEquals(10, document.get("total").asJsonNumber().getValue().intValue(), id);
+        }
+    }
+
+    @Test
+    public void test_a_hook_rejecting_one_match_rejects_the_whole_conditional_save() throws Exception {
+        for (final var id : List.of("r1", "r2", "r3")) {
+            assertEquals(OperationStatus.OK, save(id).getStatus());
+        }
+        installHook("lock", "lock", "export default (d) => { if (d._id === 'r2') { throw new Error('locked'); } };",
+                EventType.UPDATED);
+        final var patch = new JsonObject();
+        patch.add("price", new JsonNumber(7));
+
+        final var response = saveWhereQtyIsTwo(patch);
+
+        assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(), response.getErrorCode());
+        assertEquals(org.techhouse.ops.OperationType.SAVE, response.getType());
+        for (final var id : List.of("r1", "r2", "r3")) {
+            final var document = find(id);
+            assertNotNull(document, id);
+            assertEquals(10, document.get("price").asJsonNumber().getValue().intValue(), id + " must be unchanged");
+        }
     }
 
     @Test

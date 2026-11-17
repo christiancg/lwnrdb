@@ -6,6 +6,8 @@ import sys
 import tempfile
 
 import base_utils as bu
+import client_snapshot_cases as snapshots
+import format_version_cases as formats
 from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
@@ -183,6 +185,20 @@ def test_exec(cwd: str):
     check("a wrong password exits 3", client(cwd, "--exec", "{}", password="wrong").returncode == 3)
     check("no mode exits 2", client(cwd, "--host", HOST).returncode == 2)
     check("a closed port exits 3", client(cwd, "--exec", "{}", port=1).returncode == 3)
+
+
+def test_health(cwd: str, log_path: str):
+    section("--health")
+    ready = client(cwd, "--health", password=None)
+    out = ready.stdout.decode()
+    check("--health exits 0 against a ready server, without a password", ready.returncode == 0,
+          ready.stderr.decode())
+    check("and prints the SERVER_INFO reply", json.loads(out).get("server") == {"state": "READY"}, out)
+    check("--health against a closed port exits 3", client(cwd, "--health", port=1, password=None).returncode == 3)
+    version = send(SOURCE_PORT, {"type": "SERVER_INFO"}).get("server", {}).get("version")
+    with open(log_path, encoding="utf-8", errors="replace") as log:
+        check("the server log names the version SERVER_INFO reports", f"LWNRDB {version} starting" in log.read(),
+              str(version))
 
 
 def test_shell(cwd: str):
@@ -414,6 +430,147 @@ def test_non_admin_dump_and_restore(cwd: str):
           nobody.stderr.decode())
 
 
+MULTI = "client_multi"
+PRODUCTS = "products"
+BIG = "big_rows"
+BIG_ROWS = 400
+BIG_ROW_BYTES = 100_000
+SMALL_CLIENT_HEAP = "-Xmx32m"
+WIDE = "client_wide"
+WIDE_ROWS = 160
+WIDE_ROW_BYTES = 60_000
+WIDE_LINE_BYTES = 1_000_000
+HALVED = "client_halved"
+HALVED_ROWS = 40
+HALVED_ROW_BYTES = 200_000
+HALVED_REPLY_CAP = 2_000_000
+
+
+def registered_indexes(port: int, db: str, coll: str) -> list:
+    stats = send(port, {"type": "GET_DATABASE_STATS"}).get("stats", {}).get("databases", [])
+    return sorted(index for d in stats if d.get("name") == db for c in d.get("collections", [])
+                  if c.get("name") == coll for index in c.get("indexes") or [])
+
+
+def test_dump_restore_multi_field_index_round_trip(cwd: str):
+    section("Dump and restore of several indexes as one CREATE_INDEX")
+    with admin(SOURCE_PORT) as c:
+        check_status(f"create {MULTI}", c.send({"type": "CREATE_DATABASE", "databaseName": MULTI}), "OK")
+        check_status(f"create {MULTI}.{PRODUCTS}", c.send({"type": "CREATE_COLLECTION", "databaseName": MULTI,
+                                                           "collectionName": PRODUCTS}), "OK")
+        check_status("save products", c.send({"type": "BULK_SAVE", "databaseName": MULTI, "collectionName": PRODUCTS,
+                                              "objects": [{"_id": f"p{i}", "sku": f"s{i}", "color": f"c{i % 4}",
+                                                           "price": i, "tags": [f"t{i % 3}"]} for i in range(300)]}),
+                     "OK")
+        check_status("index four fields with one request", c.send({
+            "type": "CREATE_INDEX", "databaseName": MULTI, "collectionName": PRODUCTS,
+            "fieldNames": ["sku", "color", "price", "tags"]}), "OK")
+    dumped = client(cwd, "--dump", "--databases", MULTI)
+    check("--dump of the database exits 0", dumped.returncode == 0, dumped.stderr.decode())
+    create_index_lines = [json.loads(line) for line in dumped.stdout.decode().splitlines()
+                          if json.loads(line).get("type") == "CREATE_INDEX"]
+    check("the dump holds one CREATE_INDEX for the collection", len(create_index_lines) == 1, str(create_index_lines))
+    check("naming every indexed field", create_index_lines and sorted(create_index_lines[0].get("fieldNames") or [])
+          == ["color", "price", "sku", "tags"], str(create_index_lines))
+    restored = client(cwd, "--restore", port=TARGET_PORT, stdin=dumped.stdout)
+    check("--restore exits 0", restored.returncode == 0, restored.stderr.decode())
+    check("the target registers the same indexes",
+          registered_indexes(TARGET_PORT, MULTI, PRODUCTS) == registered_indexes(SOURCE_PORT, MULTI, PRODUCTS)
+          == ["color", "price", "sku", "tags"], str(registered_indexes(TARGET_PORT, MULTI, PRODUCTS)))
+    for field, value in (("color", "c2"), ("tags", ["t1"])):
+        query = {"type": "AGGREGATE", "databaseName": MULTI, "collectionName": PRODUCTS,
+                 "aggregationSteps": [bu.filter_step(field, "EQUALS", value)], "analyze": True}
+        target = send(TARGET_PORT, query)
+        check(f"the restored {field} index answers like the source",
+              bu.ids_of(target) == bu.ids_of(send(SOURCE_PORT, query)) and bool(bu.ids_of(target))
+              and field in (target.get("analyzeResult") or {}).get("indexesUsed", []),
+              str(target.get("analyzeResult")))
+    again = client(cwd, "--restore", port=TARGET_PORT, stdin=dumped.stdout)
+    check("restoring it again is idempotent", again.returncode == 0, again.stderr.decode())
+    for port in (SOURCE_PORT, TARGET_PORT):
+        send(port, {"type": "DROP_DATABASE", "databaseName": MULTI})
+
+
+def test_exec_large_result_small_client_heap(cwd: str):
+    section("--exec relays a large result through a small client heap")
+    with admin(SOURCE_PORT) as c:
+        check_status(f"create {CRM}.{BIG}", c.send({"type": "CREATE_COLLECTION", "databaseName": CRM,
+                                                     "collectionName": BIG}), "OK")
+        for start in range(0, BIG_ROWS, 40):
+            check_status(f"save big rows {start}..", c.send({
+                "type": "BULK_SAVE", "databaseName": CRM, "collectionName": BIG,
+                "objects": [{"_id": f"b{i:04d}", "body": f"{i}:" + "b" * BIG_ROW_BYTES}
+                            for i in range(start, start + 40)]}), "OK")
+    request = json.dumps({"type": "AGGREGATE", "databaseName": CRM, "collectionName": BIG, "aggregationSteps": []})
+    command = [*bu.client_argv(SMALL_CLIENT_HEAP), "--exec", request, "--port", str(SOURCE_PORT),
+               "--password", bu.PASSWORD]
+    result = subprocess.run(command, capture_output=True, cwd=cwd, timeout=CLIENT_TIMEOUT_S)
+    check(f"--exec with {SMALL_CLIENT_HEAP} exits 0", result.returncode == 0, result.stderr.decode()[-500:])
+    lines = result.stdout.decode().splitlines()
+    check("it prints one line", len(lines) == 1, f"{len(lines)} lines")
+    reply = json.loads(lines[0]) if len(lines) == 1 else {}
+    check(f"holding all {BIG_ROWS} rows (about {BIG_ROWS * BIG_ROW_BYTES // 1_000_000} MB)",
+          reply.get("status") == "OK" and len(reply.get("results") or []) == BIG_ROWS,
+          f"{len(result.stdout)} bytes")
+    send(SOURCE_PORT, {"type": "DROP_COLLECTION", "databaseName": CRM, "collectionName": BIG})
+
+
+def test_dump_restore_of_multi_megabyte_lines(cwd: str):
+    section("Dump and restore of multi-megabyte BULK_SAVE lines")
+    with admin(SOURCE_PORT) as c:
+        check_status(f"create {WIDE}", c.send({"type": "CREATE_DATABASE", "databaseName": WIDE}), "OK")
+        check_status(f"create {WIDE}.{BIG}", c.send({"type": "CREATE_COLLECTION", "databaseName": WIDE,
+                                                     "collectionName": BIG}), "OK")
+        for start in range(0, WIDE_ROWS, 20):
+            check_status(f"save wide rows {start}..", c.send({
+                "type": "BULK_SAVE", "databaseName": WIDE, "collectionName": BIG,
+                "objects": [{"_id": f"w{i:04d}", "body": f"{i}:" + "w" * WIDE_ROW_BYTES, "n": i}
+                            for i in range(start, start + 20)]}), "OK")
+    dumped = client(cwd, "--dump", "--databases", WIDE)
+    check("--dump of the wide database exits 0", dumped.returncode == 0, dumped.stderr.decode())
+    longest = max(len(line) for line in dumped.stdout.splitlines())
+    check("its BULK_SAVE lines are several megabytes, past many write chunks", longest > WIDE_LINE_BYTES,
+          f"longest line {longest} bytes")
+    restored = client(cwd, "--restore", port=TARGET_PORT, stdin=dumped.stdout)
+    check("--restore of the wide lines exits 0", restored.returncode == 0, restored.stderr.decode())
+    check("every wide document is restored byte for byte",
+          documents_of_port(TARGET_PORT, WIDE, BIG) == documents_of_port(SOURCE_PORT, WIDE, BIG)
+          and len(documents_of_port(TARGET_PORT, WIDE, BIG)) == WIDE_ROWS)
+    update = {"type": "SAVE", "databaseName": WIDE, "collectionName": BIG,
+              "object": {"_id": "w0007", "body": "rewritten", "n": 7}}
+    check_status("the restored collection takes a write", send(TARGET_PORT, update), "OK")
+    check("and reads it back", (document_of(TARGET_PORT, WIDE, BIG, "w0007") or {}).get("body") == "rewritten")
+    for port in (SOURCE_PORT, TARGET_PORT):
+        send(port, {"type": "DROP_DATABASE", "databaseName": WIDE})
+
+
+def test_dump_halves_a_page_past_the_reply_cap(cwd: str):
+    section(f"--dump halves a page whose reply passes the client's cap ({HALVED_REPLY_CAP} bytes)")
+    with admin(SOURCE_PORT) as c:
+        check_status(f"create {HALVED}", c.send({"type": "CREATE_DATABASE", "databaseName": HALVED}), "OK")
+        check_status(f"create {HALVED}.{BIG}", c.send({"type": "CREATE_COLLECTION", "databaseName": HALVED,
+                                                       "collectionName": BIG}), "OK")
+        for start in range(0, HALVED_ROWS, 5):
+            check_status(f"save halved rows {start}..", c.send({
+                "type": "BULK_SAVE", "databaseName": HALVED, "collectionName": BIG,
+                "objects": [{"_id": f"h{i:03d}", "body": "h" * HALVED_ROW_BYTES, "n": i}
+                            for i in range(start, start + 5)]}), "OK")
+    dumped = client(cwd, "--dump", "--databases", HALVED, "--max-reply-bytes", str(HALVED_REPLY_CAP))
+    check("--dump with a small reply cap exits 0", dumped.returncode == 0, dumped.stderr.decode())
+    check("it reports every document", f"{HALVED}.{BIG}: {HALVED_ROWS} documents" in dumped.stderr.decode(),
+          dumped.stderr.decode())
+    restored = client(cwd, "--restore", port=TARGET_PORT, stdin=dumped.stdout)
+    check("--restore of the halved dump exits 0", restored.returncode == 0, restored.stderr.decode())
+    check("every document is restored byte for byte",
+          documents_of_port(TARGET_PORT, HALVED, BIG) == documents_of_port(SOURCE_PORT, HALVED, BIG)
+          and len(documents_of_port(TARGET_PORT, HALVED, BIG)) == HALVED_ROWS)
+    too_small = client(cwd, "--dump", "--databases", HALVED, "--max-reply-bytes", str(HALVED_ROW_BYTES // 2))
+    check("a document larger than the cap fails the dump and names where it was",
+          too_small.returncode != 0 and "after the start" in too_small.stderr.decode(), too_small.stderr.decode())
+    for port in (SOURCE_PORT, TARGET_PORT):
+        send(port, {"type": "DROP_DATABASE", "databaseName": HALVED})
+
+
 def test_hygiene(cwd: str, plain_dump: bytes):
     section("Hygiene")
     check("the client working directory stays empty", os.listdir(cwd) == [], str(os.listdir(cwd)))
@@ -430,8 +587,17 @@ def test_tls(cwd: str, work_dir: str, log_path: str):
         trusted = bu.wait_until(lambda: client(cwd, "--tls", "--insecure", "--exec", '{"type":"LIST_DATABASES"}')
                                 .returncode == 0, 30.0)
         check("--tls --insecure exits 0", bool(trusted))
+        health = client(cwd, "--health", "--tls", "--insecure", password=None)
+        check("--health --tls --insecure exits 0", health.returncode == 0, health.stderr.decode())
+        insecure = client(cwd, "--tls", "--insecure", "--exec", '{"type":"LIST_DATABASES"}')
+        check("--insecure warns on stderr", insecure.stderr.decode().startswith("WARNING: --insecure is active"),
+              insecure.stderr.decode())
+        check("and keeps stdout to the reply alone", json.loads(insecure.stdout.decode()).get("status") == "OK",
+              insecure.stdout.decode()[:200])
         verified = client(cwd, "--tls", "--exec", '{"type":"LIST_DATABASES"}')
         check("--tls against the self-signed certificate exits 3", verified.returncode == 3, verified.stderr.decode())
+        check("a verified --tls prints no insecure warning", "--insecure" not in verified.stderr.decode(),
+              verified.stderr.decode())
     finally:
         bu.stop_server(proc, port=SOURCE_PORT)
 
@@ -460,15 +626,28 @@ def main():
               detail=f"{page_files(source_dir, CRM, NOTES)} page files")
         source_state = snapshot(SOURCE_PORT)
         test_exec(client_dir)
+        test_health(client_dir, source_log)
         test_shell(client_dir)
         plain_dump = test_round_trip(client_dir, source_state)
         test_restore_one_database(client_dir)
         test_restore_one_collection_into_a_live_server(client_dir)
         test_non_admin_dump_and_restore(client_dir)
+        test_dump_restore_multi_field_index_round_trip(client_dir)
+        test_exec_large_result_small_client_heap(client_dir)
+        test_dump_restore_of_multi_megabyte_lines(client_dir)
+        test_dump_halves_a_page_past_the_reply_cap(client_dir)
+        snapshots.test_dump_is_a_point_in_time_cut_under_writes(client_dir, client, SOURCE_PORT, TARGET_PORT)
         test_hygiene(client_dir, plain_dump)
         bu.stop_server(source, port=SOURCE_PORT)
         source = None
+        write_config(source_dir, SOURCE_PORT, snapshotMaxBytes="64kb", snapshotMaxOpen=1, snapshotIdleTimeoutMs=2000)
+        source = bu.start_server(source_dir, source_log, port=SOURCE_PORT)
+        snapshots.test_a_snapshot_past_its_budget_is_aborted_and_the_writes_stand(SOURCE_PORT)
+        snapshots.test_snapshots_are_released_on_disconnect_and_when_idle(SOURCE_PORT)
+        bu.stop_server(source, port=SOURCE_PORT)
+        source = None
         test_tls(client_dir, source_dir, source_log)
+        formats.run_all(write_config, SOURCE_PORT)
     except Exception as exc:  # noqa: BLE001 - the suite reports rather than propagates
         print(f"\nunexpected failure: {exc}", file=sys.stderr)
         bu.dump_log(source_log)

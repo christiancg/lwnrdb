@@ -6,7 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +23,7 @@ import org.techhouse.client.Requests;
 import org.techhouse.unit.client.support.FakeLineServer;
 
 public class ConnectionTest {
+    private static final Duration ACCEPT_WAIT = Duration.ofSeconds(10);
     private FakeLineServer server;
 
     @BeforeEach
@@ -80,6 +84,15 @@ public class ConnectionTest {
             assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"SAVE\"}")));
         }
         assertEquals(3, server.types().stream().filter("SAVE"::equals).count());
+    }
+
+    @Test
+    public void test_retries_a_read_refused_503_17_then_succeeds() throws IOException {
+        server.reply("AGGREGATE", FakeLineServer.error("AGGREGATE", "ERROR", "503-17"), FakeLineServer.ok("AGGREGATE"));
+        try (var connection = server.connect()) {
+            assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"AGGREGATE\"}")));
+        }
+        assertEquals(2, server.types().stream().filter("AGGREGATE"::equals).count());
     }
 
     @Test
@@ -160,7 +173,7 @@ public class ConnectionTest {
     @Test
     public void test_open_on_a_closed_port_is_unreachable() throws IOException {
         final int closedPort;
-        try (var probe = new ServerSocket(0)) {
+        try (var probe = loopbackServerSocket()) {
             closedPort = probe.getLocalPort();
         }
         final var options = ClientOptions.parse(new String[]{"--shell", "--port", String.valueOf(closedPort)},
@@ -176,7 +189,7 @@ public class ConnectionTest {
     }
 
     private static void assertHandshakeFails(String... tlsFlags) throws Exception {
-        try (var closing = new ServerSocket(0)) {
+        try (var closing = loopbackServerSocket()) {
             final var acceptor = Thread.ofVirtual().start(() -> {
                 try {
                     closing.accept().close();
@@ -188,7 +201,97 @@ public class ConnectionTest {
             final var options = ClientOptions.parse(args.toArray(String[]::new), Map.of());
             final var error = assertThrows(ClientException.class, () -> Connection.open(options).close());
             assertEquals(ClientException.UNREACHABLE, error.exitCode());
-            acceptor.join();
+            assertTrue(acceptor.join(ACCEPT_WAIT), "the client never reached this test's own server socket");
+        }
+    }
+
+    private static ServerSocket loopbackServerSocket() throws IOException {
+        return new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+    }
+
+    @Test
+    public void aReplyLongerThanTheCapFails() throws IOException {
+        server.reply("LIST_DATABASES", FakeLineServer.ok("LIST_DATABASES", "\"blob\":\"" + "x".repeat(4096) + "\""));
+        try (var connection = new Connection(new Socket(InetAddress.getLoopbackAddress(), server.port()), Duration.ZERO,
+                Duration.ofSeconds(10), 1024)) {
+            final var failure = assertThrows(ClientException.class, () -> connection.send(Requests.listDatabases()));
+
+            assertEquals(ClientException.FAILED, failure.exitCode());
+            assertTrue(failure.getMessage().contains("longer than 1024 bytes"), failure.getMessage());
+        }
+    }
+
+    @Test
+    public void aReplyAtTheCapIsRead() throws IOException {
+        final var reply = FakeLineServer.ok("LIST_DATABASES");
+        server.reply("LIST_DATABASES", reply);
+        try (var connection = new Connection(new Socket(InetAddress.getLoopbackAddress(), server.port()), Duration.ZERO,
+                Duration.ofSeconds(10), reply.length())) {
+            assertTrue(Connection.isOk(connection.send(Requests.listDatabases())));
+        }
+    }
+
+    @Test
+    public void aSilentServerTimesOut() throws IOException {
+        try (var silent = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+                var socket = new Socket(InetAddress.getLoopbackAddress(), silent.getLocalPort());
+                var accepted = silent.accept()) {
+            final var connection = new Connection(socket, Duration.ZERO, Duration.ofMillis(300), 1024);
+            final var failure = assertThrows(ClientException.class, () -> connection.send(Requests.listDatabases()));
+
+            assertEquals(ClientException.UNREACHABLE, failure.exitCode());
+            assertTrue(failure.getMessage().contains("no reply from the server within 0.3 s"), failure.getMessage());
+            assertTrue(accepted.isConnected());
+        }
+    }
+
+    @Test
+    public void theDefaultConnectionHasAReadTimeout() throws IOException {
+        try (var connection = server.connect()) {
+            assertTrue(Connection.isOk(connection.send(Requests.listDatabases())));
+        }
+        assertTrue(Connection.READ_TIMEOUT.toMillis() > 0);
+    }
+
+    @Test
+    public void aReplicationTimeoutIsReportedNotResent() throws IOException {
+        server.reply("SAVE", FakeLineServer.error("SAVE", "ERROR", "503-3"), FakeLineServer.ok("SAVE"));
+        try (var connection = server.connect()) {
+            assertEquals("503-3", Connection.errorCodeOf(connection.sendLine("{\"type\":\"SAVE\"}")));
+        }
+        assertEquals(1, server.types().stream().filter("SAVE"::equals).count());
+    }
+
+    @Test
+    public void theBudgetRefusalsAreRetried() throws IOException {
+        server.reply("AGGREGATE", FakeLineServer.error("AGGREGATE", "ERROR", "503-20"), FakeLineServer.ok("AGGREGATE"));
+        server.reply("SAVE", FakeLineServer.error("SAVE", "ERROR", "503-21"), FakeLineServer.ok("SAVE"));
+        try (var connection = server.connect()) {
+            assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"AGGREGATE\"}")));
+            assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"SAVE\"}")));
+        }
+        assertEquals(2, server.types().stream().filter("AGGREGATE"::equals).count());
+        assertEquals(2, server.types().stream().filter("SAVE"::equals).count());
+    }
+
+    @Test
+    public void aDeeplyNestedReplyIsAnErrorReplyNotACrash() {
+        final var reply = Connection.parseReply("[".repeat(1_000_000));
+
+        assertFalse(Connection.isOk(reply));
+        assertEquals("ERROR", Connection.stringOf(reply, Connection.STATUS));
+    }
+
+    @Test
+    public void anOverlongReplyLeavesTheConnectionUsable() throws IOException {
+        server.reply("LIST_DATABASES", FakeLineServer.ok("LIST_DATABASES", "\"blob\":\"" + "x".repeat(100_000) + "\""));
+        try (var connection = new Connection(new Socket(InetAddress.getLoopbackAddress(), server.port()), Duration.ZERO,
+                Duration.ofSeconds(10), 1024)) {
+            final var failure = assertThrows(ClientException.class, () -> connection.send(Requests.listDatabases()));
+            assertTrue(Connection.isReplyTooLong(failure));
+
+            assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"LIST_COLLECTIONS\"}")),
+                    "the next exchange reads the next line, not the rest of the overlong one");
         }
     }
 }

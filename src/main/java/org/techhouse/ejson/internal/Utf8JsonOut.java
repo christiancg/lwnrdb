@@ -116,10 +116,11 @@ public final class Utf8JsonOut implements JsonOut {
     public void appendEscaped(String text) {
         final var length = text.length();
         ensure(length);
-        var i = 0;
+        var i = plainAsciiPrefixOf(text, length);
+        copyAsciiPrefix(text, i);
         while (i < length) {
             final var c = text.charAt(i);
-            if (c >= ' ' && c < 0x80 && c != '"' && c != '\\') {
+            if (JsonStrings.isPlainAscii(c)) {
                 if (size == buffer.length) {
                     ensure(length - i);
                 }
@@ -129,6 +130,27 @@ public final class Utf8JsonOut implements JsonOut {
                 i = appendEscapedSlow(text, i);
             }
         }
+    }
+
+    @Override
+    public void appendPlainAscii(String text) {
+        final var length = text.length();
+        ensure(length);
+        copyAsciiPrefix(text, length);
+    }
+
+    private static int plainAsciiPrefixOf(String text, int length) {
+        var i = 0;
+        while (i < length && JsonStrings.isPlainAscii(text.charAt(i))) {
+            i++;
+        }
+        return i;
+    }
+
+    @SuppressWarnings("deprecation")
+    private void copyAsciiPrefix(String text, int prefixLength) {
+        text.getBytes(0, prefixLength, buffer, size);
+        size += prefixLength;
     }
 
     private int appendEscapedSlow(String text, int index) {

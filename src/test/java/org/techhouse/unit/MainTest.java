@@ -1,14 +1,20 @@
 package org.techhouse.unit;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.file.Files;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 import org.junit.jupiter.api.AfterEach;
@@ -21,8 +27,10 @@ import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.ex.InvalidPortException;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.ScriptRunHistory;
@@ -32,6 +40,8 @@ import org.techhouse.test.TestUtils;
 
 public class MainTest {
     private static final long KEYSTORE_WAIT_MS = 10_000L;
+    private static final long STARTUP_WAIT_MS = 30_000L;
+    private static final int CONNECT_ATTEMPT_MS = 200;
     private static final long BIND_FAILURE_WAIT_MS = 30_000L;
     private final Configuration config = Configuration.getInstance();
     private String origPassword;
@@ -53,6 +63,7 @@ public class MainTest {
         IocContainer.get(TriggerExecutor.class).stop();
         IocContainer.get(ScheduleExecutor.class).stop();
         IocContainer.get(ScriptRunHistory.class).stopSweep();
+        IocContainer.get(WriteStallWatchdog.class).stop();
         ScriptHeapGuard.setCeilingPercent(ScriptHeapGuard.OFF);
         final var dbPath = new File(TestGlobals.PATH);
         if (dbPath.exists()) {
@@ -83,7 +94,7 @@ public class MainTest {
                 }
             });
             thread.start();
-            Thread.sleep(1000);
+            assertTrue(awaitListening(9090), "the server never started listening");
             assertTrue(thread.isAlive());
         } finally {
             if (thread != null) {
@@ -113,6 +124,7 @@ public class MainTest {
             });
             thread.start();
             assertTrue(awaitFile(new File(TestGlobals.PATH + "/lwnrdb.p12")), "the keystore was never generated");
+            assertTrue(awaitListening(9092), "the server never started listening");
             assertTrue(thread.isAlive());
         } finally {
             if (thread != null) {
@@ -120,6 +132,20 @@ public class MainTest {
             }
             TestUtils.setPrivateField(config, "tlsEnabled", false);
         }
+    }
+
+    @SuppressWarnings("BusyWait")
+    private static boolean awaitListening(int port) throws InterruptedException {
+        final var deadline = System.currentTimeMillis() + STARTUP_WAIT_MS;
+        while (System.currentTimeMillis() < deadline) {
+            try (var socket = new Socket()) {
+                socket.connect(new InetSocketAddress("localhost", port), CONNECT_ATTEMPT_MS);
+                return true;
+            } catch (IOException notYet) {
+                Thread.sleep(20);
+            }
+        }
+        return false;
     }
 
     @SuppressWarnings("BusyWait")
@@ -154,7 +180,7 @@ public class MainTest {
             }
         });
         thread.start();
-        Thread.sleep(500);
+        assertTrue(awaitListening(19099), "the server never started listening");
         thread.interrupt();
         thread.join(2000);
     }
@@ -182,6 +208,33 @@ public class MainTest {
             assertEquals(1, status.get());
         } finally {
             exitField.set(null, original);
+        }
+    }
+
+    @Test
+    public void aLogThatCannotBeReplayedRefusesStartWithOneFatalLineInsteadOfAnException() throws Exception {
+        assumeTrue(OwnerOnlyFiles.supported(), "only permission bits can make a file unreadable to its owner");
+        TestUtils.standardTearDown();
+        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
+        TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
+        final var folder = new File(TestGlobals.PATH, "unreplayable/docs");
+        assertTrue(folder.mkdirs());
+        final var log = new File(folder, "docs.wal");
+        Files.write(log.toPath(), new byte[]{1, 2, 3});
+        assertTrue(log.setReadable(false, false));
+        assumeFalse(log.canRead(), "the process can still read an unreadable file (root)");
+        final var exitField = ServerMain.class.getDeclaredField("exit");
+        exitField.setAccessible(true);
+        final var original = exitField.get(null);
+        final var status = new AtomicInteger(-1);
+        exitField.set(null, (IntConsumer) status::set);
+        try {
+            assertDoesNotThrow(() -> Main.main(new String[]{}));
+            assertEquals(1, status.get());
+        } finally {
+            exitField.set(null, original);
+            assertTrue(log.setReadable(true, false));
+            TestUtils.standardTearDown();
         }
     }
 

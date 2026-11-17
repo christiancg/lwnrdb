@@ -13,6 +13,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.TombstoneStore;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -150,6 +151,7 @@ public final class DatabaseStatsHelper {
             userCacheBytes += r.estimatedSizeBytes();
         }
         memory.addProperty("userCacheBytes", userCacheBytes);
+        memory.addProperty("residentTombstoneBytes", TombstoneStore.residentBytes());
         memory.addProperty("maxMemoryBytes", configuration.getMaxMemoryBytes());
         memory.addProperty("cachingDisabled", configuration.isCachingDisabled());
         memory.addProperty("cacheUnlimited", configuration.isCacheUnlimited());
@@ -208,17 +210,10 @@ public final class DatabaseStatsHelper {
     private static CollectionStats buildCollectionStats(String dbName, String collName) {
         final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
         final var indexes = collEntry == null ? Set.<String>of() : collEntry.getIndexes();
-        final var pageEntries = cache.getAdminPageEntries(dbName, collName);
-        long entryCount = 0L;
-        long sizeBytes = 0L;
-        long pageCount = 0L;
-        if (pageEntries != null) {
-            pageCount = pageEntries.size();
-            for (var p : pageEntries) {
-                entryCount += p.getEntryCount();
-                sizeBytes += p.getPageSize();
-            }
-        }
+        final var stored = StoredTotals.ofCollection(dbName, collName);
+        final var pageCount = stored.pages();
+        final var entryCount = stored.entries();
+        final var sizeBytes = stored.sizeBytes();
         final var collObj = new JsonObject();
         collObj.addProperty("name", collName);
         collObj.addProperty("indexCount", (long) indexes.size());

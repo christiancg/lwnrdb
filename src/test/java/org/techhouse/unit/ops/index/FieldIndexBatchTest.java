@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atMost;
@@ -130,10 +131,13 @@ public class FieldIndexBatchTest {
         support.applyBatch(FIELD, idsSettingTheirValues(random, 200));
 
         for (final var label : FieldIndexBatchSupport.typeLabels()) {
-            verify(spied, atMost(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq(label), any(), any());
+            verify(spied, atMost(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq(label), any(), any(),
+                    anyBoolean());
         }
-        verify(spied, times(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq("String"), any(), any());
-        verify(spied, times(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq("Number"), any(), any());
+        verify(spied, times(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq("String"), any(), any(),
+                anyBoolean());
+        verify(spied, times(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq("Number"), any(), any(),
+                anyBoolean());
     }
 
     @Test
@@ -144,7 +148,8 @@ public class FieldIndexBatchTest {
 
         support.applyBatch(FIELD, List.of("n1", "n1"));
 
-        verify(spied, never()).appendIndexLog(anyString(), anyString(), anyString(), anyString(), any(), any());
+        verify(spied, never()).appendIndexLog(anyString(), anyString(), anyString(), anyString(), any(), any(),
+                anyBoolean());
     }
 
     @Test
@@ -188,7 +193,7 @@ public class FieldIndexBatchTest {
         doc.getData().addProperty(FIELD, "after");
         final var spied = spyTheBatchFileSystem();
         doThrow(new IOException("disk full")).when(spied).appendIndexLog(anyString(), anyString(), anyString(),
-                anyString(), any(), any());
+                anyString(), any(), any(), anyBoolean());
 
         assertThrows(IOException.class,
                 () -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("f1")));
@@ -235,7 +240,7 @@ public class FieldIndexBatchTest {
         doc.getData().addProperty(FIELD, "after");
         final var spied = spyTheBatchFileSystem();
         doThrow(new IOException("disk full")).when(spied).appendIndexLog(anyString(), anyString(), anyString(),
-                anyString(), any(), any());
+                anyString(), any(), any(), anyBoolean());
 
         assertThrows(IOException.class,
                 () -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("w2")));
