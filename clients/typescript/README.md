@@ -1,8 +1,8 @@
 # LWNRDB Node.js client
 
-The official Node.js client for [LWNRDB](https://github.com/christiancg/lwnrdb): a pool of authenticated connections, a
-fluent query builder, transactions, live queries and the server's custom value types, for JavaScript and TypeScript on
-Node.js 22.12 or newer. It has no runtime dependencies.
+The JavaScript and TypeScript client for [LWNRDB](https://github.com/christiancg/lwnrdb). It keeps a pool of
+authenticated connections and gives you a fluent query builder, transactions, live queries and the server's custom
+value types. It needs Node.js 22.12 or newer and has no runtime dependencies.
 
 ## Installation
 
@@ -10,16 +10,7 @@ Node.js 22.12 or newer. It has no runtime dependencies.
 npm install lwnrdb-client
 ```
 
-The package is ESM with bundled type declarations. CommonJS code loads it with `require`, which Node.js supports for ES
-modules since 22.12:
-
-```js
-import { LwnrdbClient, field } from "lwnrdb-client";
-```
-
-```js
-const { LwnrdbClient, field } = require("lwnrdb-client");
-```
+The package is ESM with its type declarations included. CommonJS code can load it with `require`.
 
 ## Quick start
 
@@ -49,33 +40,18 @@ const page = await orders
 await client.close();
 ```
 
-A collection must exist before its first write: a save into a missing one is refused with `404-11`.
-
-The client holds a pool of connections (8 by default). Each request borrows one connection until its reply arrives, so
-the pool size bounds how many requests run at once; raise `poolSize` when more need to run in parallel. Idle
-connections do not keep the process alive, and `await using client = await LwnrdbClient.connect(...)` closes the client
-at the end of its block.
+A collection has to exist before you write to it. Besides `save` and `findById`, a collection has `insert`, `saveAll`,
+`delete`, `updateWhere` and `deleteWhere`. The pool size is how many requests run at once.
 
 ## Settings
 
-| Setting             | Default                               |                                                                    |
-| ------------------- | ------------------------------------- | ------------------------------------------------------------------ |
-| `hosts`             | `[{ host: "localhost", port: 8989 }]` | tried in turn when a connection is opened                          |
-| `credentials`       | none                                  | `{ username, password }`; every connection authenticates with them |
-| `tls`               | off                                   | see [TLS](#tls)                                                    |
-| `poolSize`          | `8`                                   | connections shared by requests                                     |
-| `connectTimeoutMs`  | `10000`                               | per connection attempt, TLS handshake included                     |
-| `requestTimeoutMs`  | `330000`                              | a request with no reply in time closes its connection              |
-| `acquireTimeoutMs`  | `30000`                               | how long a request waits for a free connection                     |
-| `shutdownTimeoutMs` | `10000`                               | how long `close()` waits for requests in flight                    |
-| `maxReplyBytes`     | 256 MB                                | a longer reply fails its request                                   |
-| `retryPolicy`       | 5 attempts, 50 ms doubling to 2 s     | see [Errors and retries](#errors-and-retries)                      |
-| `temporalZone`      | none                                  | the IANA zone a `Date` is converted through                        |
+The ones you usually set are `hosts` (tried in turn), `credentials` (`{ username, password }`), `tls` and `poolSize`
+(8 by default). Timeouts, the retry policy and the rest are in the API reference.
 
 ## Typed collections
 
-`collection<T>(name)` types what you save as `T` and what you read as `T & { _id: string }`. The type is a compile-time
-promise only: documents are stored as they are.
+`collection<T>(name)` types what you save as `T` and what you read as `T & { _id: string }`. It is only a compile-time
+type.
 
 ```ts
 interface Order {
@@ -90,19 +66,11 @@ await orders.save({ status: "active", total: 120, placedAt: LocalDateTime.of(202
 const active = await orders.query().filter(field("status").eq("active")).toArray();
 ```
 
-Pass a `DocumentCodec` to map documents to your own classes in both directions:
-
-```ts
-const invoices = shop.collection("invoices", {
-    encode: (invoice: Invoice) => ({ _id: invoice.id, cents: invoice.cents }),
-    decode: (document) => new Invoice(String(document._id), Number(document.cents)),
-});
-```
+To map documents to your own classes, pass a `DocumentCodec` with `encode` and `decode` as the second argument.
 
 ## Custom value types
 
-The server stores four value types as tagged strings; the client maps them to classes in both directions, at any depth
-of a document, a filter value or a script argument.
+The server has four value types of its own. The client maps them to classes both ways.
 
 | Server value                  | Class           | Example                                                                                   |
 | ----------------------------- | --------------- | ----------------------------------------------------------------------------------------- |
@@ -111,17 +79,13 @@ of a document, a filter value or a script argument.
 | `#geo(lat,lng)`               | `GeoPoint`      | `distance("location", GeoPoint.of(40.71, -74), GeoDistanceComparator.SMALLER_THAN, 1000)` |
 | `#vector(v0,v1,...)`          | `Vector`        | `nearest("embedding", Vector.of(0.12, 0.44, 0.91), 10)`                                   |
 
-- The server's date-time has no zone. A JavaScript `Date` is an instant, so it is refused unless the client is
-  configured with `temporalZone`; it is then stored as that zone's wall-clock time. Read values are always
-  `LocalDateTime`s; `toDate(zone)` turns one back into a `Date`.
-- A plain string that looks like a custom value (`#name(...)`) is refused, because the server would read it as one.
-- A number must be finite, and an integer must be a safe integer: the server stores numbers as doubles, so store a
-  larger integer as a string.
-- `nearest` is an approximate, index-backed search; add `.exact()` to scan every row and get the true top `k`.
+The server's date-time has no zone, so a `Date` is refused unless you set `temporalZone`. The server stores numbers as
+doubles, so keep integers past the safe range in strings. `nearest` is approximate. Add `.exact()` to get the true top
+`k`.
 
 ## Queries
 
-`collection.query()` starts an immutable pipeline; every step returns a new query.
+`collection.query()` starts a pipeline. Queries are immutable, so every step returns a new one.
 
 | Step                           | Method                                                                                                                                  |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -132,9 +96,7 @@ of a document, a filter value or a script argument.
 | `REDUCE`                       | `reduce(script)`, `reduce(script, initialValue, resultField)`                                                                           |
 | `COUNT`                        | `count()`                                                                                                                               |
 
-Run a query with `toArray()`, `toDocuments()` (for rows of another shape, such as `groupBy`), `first()`, `count()` or
-`analyze()`. `dirtyRead()` reads without the collection lock. `in` and `notIn` take their values as separate arguments:
-`field("status").in("new", "paid")`.
+Run it with `toArray()`, `toDocuments()`, `first()`, `count()` or `analyze()`.
 
 ## Transactions
 
@@ -147,12 +109,8 @@ const id = await client.transaction(async (tx) => {
 });
 ```
 
-The body commits when its promise resolves and rolls back when it rejects; the body's error is rethrown.
-`beginTransaction()` hands the transaction to you instead, and `await using` rolls it back if it is still open at the
-end of the block. A transaction keeps one connection until it ends. Its writes take the collection's write lock, so a
-read of that collection from outside the transaction waits for the commit (pass `{ dirtyRead: true }` to look without
-waiting). The server rolls back a transaction that is idle longer than `transactionIdleTimeoutMs` (30 s by default); its
-next request fails with `409-16`.
+The body commits when its promise resolves and rolls back when it rejects. A transaction holds one connection, its
+writes lock their collections until the commit, and the server rolls it back after `transactionIdleTimeoutMs` idle.
 
 ## Live queries
 
@@ -166,28 +124,18 @@ const subscription = await orders.listen(orders.query().filter(field("status").e
 await subscription.close();
 ```
 
-The handler receives the full result immediately (`update.initial`), then again whenever a write changes it. Updates for
-the listens of one connection are delivered in order, one at a time: an async `onUpdate` finishes before the next update
-starts. Listens use their own connections, never pooled ones, and spread over more connections when the server's
-per-connection limit is reached; those connections keep the process alive until the subscriptions close. `onEnded` is
-called when the server ends a listen (for example, its collection was dropped); `onError` when a handler threw or the
-connection was lost, which ends every subscription on it.
+The handler gets the whole result right away, then again every time a write changes it, one update at a time. Live
+queries use their own connections, which keep the process alive until you close the subscriptions.
 
 ## Errors and retries
 
-Every server refusal is an `LwnrdbError` carrying the server's code (`rawCode`, and `code` for its catalogue entry),
-subclassed by range: `AuthenticationError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409),
-`ListenEndedError` (410), `UnavailableError` (503) and `UnknownOutcomeError` (`500-33`, `500-34`). `ErrorCode` holds
-every code by name.
+Every refusal from the server is an `LwnrdbError` with the server's error code. There is a subclass per range:
+`AuthenticationError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ListenEndedError`
+(410), `UnavailableError` (503) and `UnknownOutcomeError` (`500-33`, `500-34`).
 
-The client retries, per `retryPolicy`:
-
-- a refusal whose code is retryable (`503-2/4/5/9/10/16/17/18/19/20/21`);
-- a read (`FIND_BY_ID`, `AGGREGATE`, `LIST_*`, `GET_*`, `SERVER_INFO`) whose connection was lost.
-
-It never retries a write that lost its connection (`ConnectionLostError`: the outcome is unknown), an
-`UnknownOutcomeError`, or anything inside a transaction. A request with no reply within `requestTimeoutMs` closes its
-connection and rejects with `RequestTimeoutError`.
+The client retries [retryable](../../docs/protocol.md#error-codes) codes and reads that lost their connection. It
+never retries a write that lost its connection (`ConnectionLostError`), an unknown outcome, or anything inside a
+transaction.
 
 ## TLS
 
@@ -198,9 +146,8 @@ const client = await LwnrdbClient.connect({
 });
 ```
 
-`tls: {}` uses Node's certificate authorities, `ca` trusts the PEM certificates you give it, and `insecure: true`
-trusts any certificate and skips the host-name check (development only; it emits a warning). Node has no PKCS12 trust
-store, so export the server's certificate as PEM:
+`tls: {}` uses Node's certificate authorities, and `insecure: true` trusts any certificate, only for development.
+Node can't read a PKCS12 trust store, so export the server's certificate as PEM:
 
 ```bash
 keytool -exportcert -rfc -alias <alias> -keystore lwnrdb.p12 -storetype PKCS12 -storepass <password> > lwnrdb-ca.pem
@@ -208,30 +155,18 @@ keytool -exportcert -rfc -alias <alias> -keystore lwnrdb.p12 -storetype PKCS12 -
 
 ## API reference
 
-Every public declaration carries its documentation in the published `.d.ts` files, so editors show it on hover. The
-text lives in [`apidocs/`](apidocs), one Markdown file per export with one `## member` section per public member,
-because the sources carry no comments. `npm run build` compiles, then `build-tools/inject-docs.ts` writes each section
-into the declarations, and fails when a public member has no section or a section names nothing.
+The API docs are in [`apidocs/`](apidocs) and in the published `.d.ts` files, so your editor shows them on hover.
 
 ## Building
 
 ```bash
 npm ci
-npm run verify                  # format check, ESLint, type check, unit tests with 95% coverage, build
-npm run consumers               # packs the client and checks the ESM, CommonJS and TypeScript consumers
-mvn package -DskipTests         # at the repository root: the server jar the integration tests run
+npm run verify
+npm run consumers
+mvn package -DskipTests         # at the repository root, the server jar the integration tests use
 LWNRDB_JAR=$PWD/../../target/lwnrdb.jar npm run test:it
 ```
 
-The integration tests start their own servers on free ports and need `java` on the `PATH`.
-
 ## Releasing
 
-Push a `typescript-client-vX.Y.Z` tag. `.github/workflows/release-typescript-client.yml` runs the unit and integration
-tests against a server built from the same commit, then publishes the package to npm with provenance (a version with a
-pre-release suffix goes to the `next` tag) and creates a GitHub release.
-
-It needs one repository secret, `NPM_TOKEN`: a granular access token from npmjs.com (Access Tokens → Generate New Token
-→ Granular) with read and write access to `lwnrdb-client`. Once the first release exists, npm's trusted publishing can
-replace it: add the repository and workflow as a trusted publisher in the package's settings on npmjs.com, then remove
-the `NODE_AUTH_TOKEN` line from the workflow and the secret.
+Push a `typescript-client-vX.Y.Z` tag. The release workflow tests the client and publishes it to npm.
