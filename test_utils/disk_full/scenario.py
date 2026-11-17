@@ -1,5 +1,6 @@
 import dataclasses
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -17,12 +18,48 @@ SETTLE_TIMEOUT_S = 10.0
 SETTINGS = {"maxMemory": "1mb", "maxPageSize": "8kb", "maxEntrySize": "4kb", "walCheckpointBytes": "64kb",
             "walIdleCheckpointMs": 200, "faultInjectionEnabled": True, "syncWrites": True,
             "transactionLockTimeoutMs": LOCK_TIMEOUT_MS}
+LOG_ENTRY = re.compile(r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?-(FATAL|ERROR|WARNING|INFO)-")
+UNCAUGHT_PREFIX = "Exception in thread"
+UNWRITTEN_LOG_PREFIX = "Warning: could not write log entry -> "
+SHOWN_SEVERITIES = {"FATAL", "ERROR", "UNCAUGHT"}
+SERVER_ERRORS_SHOWN = 12
+STACK_FRAMES_SHOWN = 15
 
 bu.configure(port=PORT)
 
 
 def connect():
     return bu.Conn.authenticated(port=PORT, timeout=30.0)
+
+
+def _log_entries(output: str) -> list:
+    entries = []
+    for line in output.splitlines():
+        line = line.removeprefix(UNWRITTEN_LOG_PREFIX)
+        match = LOG_ENTRY.match(line)
+        if match:
+            entries.append((match.group(1), line, line[match.end():], []))
+        elif line.startswith(UNCAUGHT_PREFIX):
+            entries.append(("UNCAUGHT", line, line, []))
+        elif entries and line.strip():
+            entries[-1][3].append(line.strip())
+    return entries
+
+
+def server_errors(output: str) -> list:
+    latest = {}
+    for index, (severity, line, text, frames) in enumerate(_log_entries(output)):
+        if severity not in SHOWN_SEVERITIES and not frames:
+            continue
+        key = re.sub(r"\d+", "#", text)[:300]
+        count = latest[key][1] + 1 if key in latest else 1
+        latest[key] = (index, count, line, frames)
+    shown = sorted(latest.values())[-SERVER_ERRORS_SHOWN:]
+    lines = []
+    for _, count, line, frames in shown:
+        lines.append(f"{count}x {line[:600]}")
+        lines += [f"    {frame}" for frame in frames[:STACK_FRAMES_SHOWN]]
+    return lines
 
 
 class Run:
@@ -36,6 +73,7 @@ class Run:
         self.notes = []
         self.offset = 0
         self.scanned = 0
+        self.errors_shown = 0
         self.workload = None
         self.schema = None
         self.scratch = tempfile.mkdtemp(prefix="lwnrdb-disk-full-run-")
@@ -67,6 +105,20 @@ class Run:
         for divergence in found:
             if divergence not in failed:
                 bu.warn(f"{self.name} seed {self.seed}: {divergence.oracle} observation", divergence.detail)
+        if failed:
+            self.show_server_errors()
+
+    def show_server_errors(self):
+        output = self.container.output()
+        errors = server_errors(output[self.errors_shown:])
+        self.errors_shown = len(output)
+        if not errors:
+            print("         the server logged no error since the last failed check")
+            return
+        print(f"         the server's distinct errors since the last failed check, at most the last "
+              f"{SERVER_ERRORS_SHOWN}, oldest first:")
+        for line in errors:
+            print(f"           {line}")
 
     def prepare(self, docs: int = 400, collections: int = 3) -> Workload:
         self.workload = Workload(self.seed, docs=docs, collections=collections)
