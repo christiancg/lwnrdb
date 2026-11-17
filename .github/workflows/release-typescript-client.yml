@@ -65,8 +65,6 @@ jobs:
       - name: Build
         run: npm run build
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           DIST_TAG="latest"
           case "${VERSION#typescript-client-v}" in *-*) DIST_TAG="next" ;; esac
