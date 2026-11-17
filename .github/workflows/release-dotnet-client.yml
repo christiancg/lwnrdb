@@ -62,6 +62,10 @@ jobs:
         working-directory: clients/dotnet
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Server compatibility
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/server-compatibility.sh" > "$RUNNER_TEMP/compatibility.md"
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
@@ -80,4 +84,4 @@ jobs:
         run: |
           PRERELEASE=""
           case "${VERSION#dotnet-client-v}" in *-*) PRERELEASE="--prerelease" ;; esac
-          gh release create "${VERSION}" --title ".NET client ${VERSION#dotnet-client-v}" --generate-notes --latest=false ${PRERELEASE}
+          gh release create "${VERSION}" --title ".NET client ${VERSION#dotnet-client-v}" --notes "$(cat "$RUNNER_TEMP/compatibility.md")" --generate-notes --latest=false ${PRERELEASE}

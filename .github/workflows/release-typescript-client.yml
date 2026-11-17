@@ -52,6 +52,10 @@ jobs:
         working-directory: clients/typescript
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Server compatibility
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/server-compatibility.sh" > "$RUNNER_TEMP/compatibility.md"
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -73,4 +77,4 @@ jobs:
         run: |
           PRERELEASE=""
           case "${VERSION#typescript-client-v}" in *-*) PRERELEASE="--prerelease" ;; esac
-          gh release create "${VERSION}" --title "TypeScript client ${VERSION#typescript-client-v}" --generate-notes --latest=false ${PRERELEASE}
+          gh release create "${VERSION}" --title "TypeScript client ${VERSION#typescript-client-v}" --notes "$(cat "$RUNNER_TEMP/compatibility.md")" --generate-notes --latest=false ${PRERELEASE}
