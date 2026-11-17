@@ -591,7 +591,8 @@ Every entry goes to `logPath` and to standard output, so `docker logs` shows it 
 are deleted.
 
 A line looks like `14:02:11.348519-INFO-org.techhouse.ServerMain - LWNRDB 0.1.0 starting`. An exception adds ` -> `
-and its message, with the stack trace on the next lines. A message is always one line, so `grep` finds whole entries.
+with its class and message, then one stack frame per line, then each cause the same way after `Caused by: `. A message
+is always one line, so `grep` finds whole entries.
 
 The lines below need someone to act. Search for the text before the first `...`.
 
