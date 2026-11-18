@@ -22,5 +22,7 @@ The protocol itself, and what a new client has to get right, is in the [wire pro
 
 ## Versioning
 
-Each client is versioned and released on its own, from a `<language>-client-vX.Y.Z` tag. Its release notes say the
-lowest server version it was checked against.
+Each client is versioned and released on its own, from a `<language>-client-vX.Y.Z` tag. Its release notes name the
+`protocolVersion` it speaks and the lowest server release that speaks it, the first `vX.Y.Z` tag whose server has that
+`protocolVersion` (see [compatibility](../docs/compatibility.md#client-libraries)). A client release refuses to publish
+until such a server release exists, so a server that raises `protocolVersion` is released before its clients.

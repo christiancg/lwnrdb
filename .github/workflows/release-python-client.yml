@@ -53,6 +53,10 @@ jobs:
         working-directory: clients/python
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Server compatibility
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/server-compatibility.sh" > "$RUNNER_TEMP/compatibility.md"
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -70,4 +74,4 @@ jobs:
         run: |
           PRERELEASE=""
           case "${VERSION#python-client-v}" in *[a-z]*) PRERELEASE="--prerelease" ;; esac
-          gh release create "${VERSION}" --title "Python client ${VERSION#python-client-v}" --generate-notes ${PRERELEASE}
+          gh release create "${VERSION}" --title "Python client ${VERSION#python-client-v}" --notes "$(cat "$RUNNER_TEMP/compatibility.md")" --generate-notes --latest=false ${PRERELEASE}

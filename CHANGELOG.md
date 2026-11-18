@@ -10,6 +10,8 @@ storage format means a dump and restore, never just a jar swap. The client libra
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-17
+
 The first release. Protocol version 1, storage format version 1.
 
 ### Added
@@ -53,4 +55,5 @@ The first release. Protocol version 1, storage format version 1.
 - Windows support: the jar runs on Windows as well as Linux and macOS, with the same data files and wire protocol
   (lines end in a line feed everywhere). See [On Windows](docs/operations.md#on-windows).
 
-[Unreleased]: https://github.com/christiancg/lwnrdb/commits/main
+[Unreleased]: https://github.com/christiancg/lwnrdb/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/christiancg/lwnrdb/releases/tag/v0.1.0
