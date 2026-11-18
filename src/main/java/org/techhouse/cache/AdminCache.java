@@ -268,7 +268,7 @@ public class AdminCache {
         return schemaCache.get(dbName, collName);
     }
 
-    public JsonObject loadSchemaUncached(String dbName, String collName) {
+    private JsonObject loadSchemaUncached(String dbName, String collName) {
         try {
             final var raw = fs.metadataFiles().readCollectionSchema(dbName, collName);
             if (raw == null || raw.isBlank()) {
@@ -302,7 +302,7 @@ public class AdminCache {
         return procedureCache.get(dbName, name);
     }
 
-    public ProcedureDefinition loadProcedureUncached(String dbName, String name) {
+    private ProcedureDefinition loadProcedureUncached(String dbName, String name) {
         try {
             final var raw = fs.metadataFiles().readProcedure(dbName, name);
             if (raw == null || raw.isBlank()) {
@@ -333,7 +333,7 @@ public class AdminCache {
         return scheduleCache.get(dbName, name);
     }
 
-    public ScheduleDefinition loadScheduleUncached(String dbName, String name) {
+    private ScheduleDefinition loadScheduleUncached(String dbName, String name) {
         try {
             final var raw = fs.metadataFiles().readSchedule(dbName, name);
             if (raw == null || raw.isBlank()) {
@@ -378,7 +378,7 @@ public class AdminCache {
         return cached;
     }
 
-    public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
+    private List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
         try {
             final var raw = fs.metadataFiles().readTriggers(dbName, collName);
             if (raw == null || raw.isBlank()) {

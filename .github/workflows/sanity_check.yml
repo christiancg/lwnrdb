@@ -14,19 +14,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
-      - name: Package the jar
-        run: mvn -B --no-transfer-progress -DskipTests package
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install native-image build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libz-dev
+      - name: Package the jar and the native executable
+        run: mvn -B --no-transfer-progress -Pnative -DskipTests package
       - name: Upload jar
         uses: actions/upload-artifact@v7
         with:
           name: lwnrdb-jar
           path: target/lwnrdb.jar
+          retention-days: 1
+      - name: Upload native executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: lwnrdb-native
+          path: target/lwnrdb
           retention-days: 1
 
   unit-tests:
@@ -38,12 +46,12 @@ jobs:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Plan the shards
         run: python3 test_utils/tools/test_shards.py --shards 4 --out target/shards-plan
       - name: Run shard ${{ matrix.shard }}
@@ -68,12 +76,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run the single-fork executions
         run: mvn -B --no-transfer-progress -Pci-shard -DskipShardedTests=true test
       - name: Name the coverage data
@@ -95,12 +103,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Download every shard's data
         uses: actions/download-artifact@v8
         with:
@@ -125,12 +133,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run SpotBugs
         run: >-
           mvn -B --no-transfer-progress -DskipTests -Dspotless.check.skip -Dcheckstyle.skip -Dpmd.skip -Dcpd.skip
@@ -141,12 +149,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Spotless, Checkstyle, CPD and PMD
         run: mvn -B --no-transfer-progress -DskipTests -Dspotbugs.skip verify
 
@@ -268,6 +276,8 @@ jobs:
     name: ${{ matrix.name }}
     needs: package
     runs-on: ubuntu-latest
+    env:
+      LWNRDB_SERVER_BIN: ${{ github.workspace }}/target/lwnrdb
     strategy:
       fail-fast: false
       matrix:
@@ -491,18 +501,21 @@ jobs:
         if: ${{ matrix.python }}
         with:
           python-version: '3.13'
-      - name: Download jar
+      - name: Download the jar and the native executable
         uses: actions/download-artifact@v8
         with:
-          name: lwnrdb-jar
+          pattern: lwnrdb-*
+          merge-multiple: true
           path: target
+      - name: Restore the executable bit
+        run: chmod +x "$LWNRDB_SERVER_BIN"
       - name: Set admin credentials for integration tests
         run: echo "defaultAdminPassword=Tst-Admin-9xQ2mV" >> lwnrdb.cfg
       - name: Start server
         if: ${{ matrix.start_server }}
         run: |
           echo "maxMemory=${{ matrix.max_memory }}" >> lwnrdb.cfg
-          java -Xmx${{ matrix.xmx }} -jar target/lwnrdb.jar > server.log 2>&1 &
+          "$LWNRDB_SERVER_BIN" -Xmx${{ matrix.xmx }} > server.log 2>&1 &
           echo $! > server.pid
           for _ in $(seq 1 150); do
             nc -z 127.0.0.1 8989 && break
@@ -515,7 +528,7 @@ jobs:
         run: ${{ matrix.run }}
       - name: Stop server
         if: ${{ always() && matrix.start_server }}
-        run: pkill -f lwnrdb.jar || true
+        run: pkill -f "$LWNRDB_SERVER_BIN" || true
 
   test262:
     name: test262 Conformance (${{ matrix.shard }}/4)
@@ -528,12 +541,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile (main + test classes)
         run: mvn -B --no-transfer-progress -DskipTests test-compile
       - name: Cache test262 corpus

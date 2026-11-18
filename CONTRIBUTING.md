@@ -4,7 +4,7 @@ Thanks for taking the time. This is a learning project and it is still experimen
 
 ## Building and testing
 
-You need JDK 27 or newer, the build refuses to run on anything older. The reason is that the regex engine of the embedded JavaScript interpreter reads its Unicode data from the JDK, and I want a script to answer the same on every machine.
+You need JDK 25, and only 25: the build refuses to run on anything else, newer included. The reason is that the regex engine of the embedded JavaScript interpreter reads its Unicode data from the JDK, and I want a script to answer the same on every machine. It is 25 rather than the newest JDK because the Docker image ships a GraalVM native executable and GraalVM has no JDK 26 or 27 release. Build the executable with GraalVM as `JAVA_HOME`: `mvn -Pnative package -DskipTests` writes `target/lwnrdb`.
 
 ```bash
 mvn clean package -DskipTests
@@ -49,7 +49,7 @@ git push origin v0.1.0
 
 The release workflow takes it from there. It stops before building anything when `CHANGELOG.md` has no section for that version. Otherwise it runs the full build with that version, attaches `lwnrdb-0.1.0.jar` to a GitHub release whose notes are that section and publishes the Docker image to `ghcr.io/christiancg/lwnrdb` with the version and `latest` tags, for `linux/amd64` and `linux/arm64`.
 
-The jar is built once, on the runner's own platform, since it does not depend on the architecture. Only the trimmed JRE (`jlink`) and the runtime layer are built per platform, the arm64 ones under QEMU. To build both images locally:
+The native executable is built per platform, the arm64 one under QEMU, so the arm64 image takes much longer than the amd64 one. To build both images locally:
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -t lwnrdb .

@@ -94,7 +94,7 @@ final class CollectionRecordApplier {
                 clusterConfig.replicationAckTimeoutMs())) {
             return false;
         }
-        if (!LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)) {
+        if (LeftoverFolders.blockedByLeftoverCollection(dbName, collName)) {
             return false;
         }
         fs.createCollectionFile(dbName, collName);

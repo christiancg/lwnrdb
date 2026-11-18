@@ -45,7 +45,9 @@ procedure or trigger code.
 - `super.m()` when the parent class is a built-in throws a `TypeError`.
 - A function written inside a template substitution (`${...}`) has no source text and no line number in a stack trace.
 - `\p{...}` property escapes come from the JDK's Unicode data and don't match every code point the Unicode tables say
-  they should.
+  they should. The build JDK is 25, so that data is Unicode 16.0, while properties of strings (`\p{RGI_Emoji}` and
+  siblings) come from our own Unicode 17.0 file. The eight `language/identifiers/*-unicode-17.0.0*` test262 cases are
+  excluded for that reason.
 - `localeCompare` and `toLocaleString` honour a locale but only `sensitivity` among the options. A locale tag is
   reduced to its language, script and region and matched against the locales the JDK ships, so `'en-x-foo'` formats as
   `en` and an unknown language falls back to `scriptLocale`. An ill-formed tag is a `RangeError`.

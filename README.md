@@ -54,6 +54,7 @@ Documents are stored as JSON lines in paged files and queried through an
   (see [docs/simplejs.md](docs/simplejs.md))
 - [clustering](docs/clustering.md) with fully replicated nodes and no master
 - [Prometheus metrics](docs/operations.md#metrics), a health check and graceful shutdown
+- a GraalVM native executable in the Docker image
 
 Things it will not do: compound indexes, sharding (every node holds all the data), compression, or competing on raw
 IOPS.
@@ -141,7 +142,7 @@ permissions of `--user`.
 From Docker, override the command (add `-i` to feed a restore):
 
 ```bash
-docker run --rm lwnrdb java -jar app.jar --dump --compress --host db.internal --password … > backup.ldump.gz
+docker run --rm lwnrdb /app/lwnrdb --dump --compress --host db.internal --password … > backup.ldump.gz
 ```
 
 ## Client libraries

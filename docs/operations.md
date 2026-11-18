@@ -27,7 +27,7 @@ guide describes what the server does today, not a promise that it is ready for d
 
 | Item | What to set | Why |
 |---|---|---|
-| Runtime | JDK 27 or newer, or the Docker image | The build requires it |
+| Runtime | The Docker image (a GraalVM native executable), or JDK 25 for the jar | The build requires it |
 | Admin password | `defaultAdminPassword` for the first start, then a second admin with [`CREATE_USER`](protocol.md#create_user-admin-only) | The server won't start without one, and a lost admin password can't be reset ([Bootstrap](#bootstrap), [Recovery](#a-lost-admin-password)) |
 | Data folder | `filePath` on a local disk that honours `fsync`, with `syncWrites=true` | Otherwise a power loss can lose acknowledged writes ([Durability](#durability)) |
 | File modes | `chmod 700` on `filePath` and `logPath`, `chmod 600` on `lwnrdb.cfg` and the keystore | They hold password hashes, data and secrets ([File permissions](#file-permissions)) |
@@ -65,13 +65,13 @@ docker build -t lwnrdb .
 docker run -p 8989:8989 -v ./db:/app/db -v ./lwnrdb.cfg:/app/lwnrdb.cfg:ro lwnrdb
 ```
 
-The image runs as the unprivileged `lwnrdb` user, so a host folder mounted over `/app/db`, `/app/logs` or `/app/certs`
+The image runs the native executable `/app/lwnrdb` as the unprivileged `nonroot` user, so a host folder mounted over `/app/db`, `/app/logs` or `/app/certs`
 must be writable by its uid (`docker run --rm --entrypoint id lwnrdb` prints it). It also has a `HEALTHCHECK`, see
 [Health checks](#health-checks).
 
 ### On Windows
 
-The jar runs unchanged on Windows with a JDK 27 for its architecture (Temurin for x64, Zulu or Liberica for ARM64). Start
+The jar runs unchanged on Windows with a JDK 25 for its architecture (Temurin for x64, Zulu or Liberica for ARM64). Start
 it from PowerShell with the same command. The data folder and dumps use line feeds everywhere, so they move between
 Windows, Linux and macOS as they are. What differs:
 
@@ -401,8 +401,9 @@ The heap holds four things:
 - everything else: the collector's headroom, requests and responses in flight, open transactions and running
   aggregates (the last two capped at a quarter of the heap each).
 
-The image gives the JVM 70% of the container's memory limit, so in Docker the only number to pick is that limit. Change
-the share with `-e JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=50` (or `-Xmx`). The startup log warns when the budgets don't
+The image gives the native executable a heap of 70% of the container's memory limit, so in Docker the only number to
+pick is that limit. Change the share by overriding the command, `/app/lwnrdb -XX:MaximumHeapSizePercent=50` (or
+`-Xmx`). The startup log warns when the budgets don't
 fit the heap. A small cached document takes about 3 KB of heap, against under 200 bytes on disk, so plan the cache
 around the data you query most. The README's [performance section](../README.md#performance) shows what the server
 does with 100,000 documents in 4 GB.
@@ -428,7 +429,7 @@ The process takes more memory than the heap: metaspace, compiled code and unused
 - `-Djdk.nio.maxCachedBufferSize=262144`: stops the JDK from caching a native buffer per thread for large file writes,
   outside the heap. Without it, restoring a dump with large documents on a 512 MB container ran out of memory.
 
-On a glibc host (the image uses Alpine), the same server uses about 185 MB more native memory. With `java -jar` there,
+On a glibc host the jar uses about 185 MB more native memory than on Alpine. With `java -jar` there,
 set `MALLOC_ARENA_MAX=2`, consider `-XX:TrimNativeHeapInterval=60000`, and keep the heap nearer the JVM's default
 quarter of memory than the image's 70%.
 
@@ -558,7 +559,7 @@ The histogram buckets go from 0.5 ms to 10 s.
 
 ### Health checks
 
-- The image runs the jar's `--health` client every 30 seconds after a 60-second start period, so `docker ps` shows
+- The image runs the native executable's `--health` client every 30 seconds after a 60-second start period, so `docker ps` shows
   `healthy` once the server is `READY`.
 - Anywhere else, run `java -jar lwnrdb.jar --health --host <host> --port <port>` (add `--tls`, and `--insecure` for a
   self-signed certificate). It needs no password and exits `0` only when the server is `READY`.

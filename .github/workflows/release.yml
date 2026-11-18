@@ -27,12 +27,12 @@ jobs:
             echo "::error::CHANGELOG.md has no '## [${VERSION#v}]' section"
             exit 1
           fi
-      - uses: actions/setup-java@v6
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Maven Verify
         run: mvn -B --no-transfer-progress verify -Drevision="${VERSION#v}"
       - name: Upload jar

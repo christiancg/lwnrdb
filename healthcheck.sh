@@ -10,4 +10,4 @@ if [ "$tls" = "true" ]; then
     set -- "$@" --tls --insecure
 fi
 
-exec java -Xmx32m -XX:TieredStopAtLevel=1 -jar /app/app.jar "$@" > /dev/null
+exec /app/lwnrdb "$@" > /dev/null

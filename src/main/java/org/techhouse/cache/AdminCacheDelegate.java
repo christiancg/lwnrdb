@@ -132,10 +132,6 @@ interface AdminCacheDelegate {
         adminCache().removeCollectionSchemasForDatabase(dbName);
     }
 
-    default JsonObject loadSchemaUncached(String dbName, String collName) {
-        return adminCache().loadSchemaUncached(dbName, collName);
-    }
-
     default ProcedureDefinition getProcedure(String dbName, String name) {
         return adminCache().getProcedure(dbName, name);
     }

@@ -89,3 +89,6 @@ clients/dotnet/**/bin/
 clients/dotnet/**/obj/
 clients/dotnet/artifacts/
 clients/dotnet/**/TestResults/
+
+### Runtime artifacts ###
+server.pid

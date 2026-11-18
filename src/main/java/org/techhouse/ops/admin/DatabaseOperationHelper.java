@@ -100,7 +100,7 @@ public final class DatabaseOperationHelper {
     private static OperationResponse register(CreateDatabaseRequest createDatabaseRequest, UUID clientId)
             throws Exception {
         final var dbName = createDatabaseRequest.getDatabaseName();
-        if (!LeftoverFolders.moveAsideUnregisteredDatabase(dbName)) {
+        if (LeftoverFolders.blockedByLeftoverDatabase(dbName)) {
             return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE);
         }
         if (fs.createDatabaseFolder(dbName)) {

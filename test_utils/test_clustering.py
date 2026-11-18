@@ -452,7 +452,7 @@ class Node:
 
     def start(self):
         with open(self.log_path, "ab") as log:
-            self.proc = bu.spawn_server(["java", "-Xmx1g", "-jar", bu.JAR_PATH], stdout=log, stderr=log,
+            self.proc = bu.spawn_server(bu.server_argv("1g"), stdout=log, stderr=log,
                                         cwd=self.work_dir)
         deadline = time.time() + 60.0
         while time.time() < deadline:
@@ -2955,7 +2955,7 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
 
 def exec_client(port: int, request: dict) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as cwd:
-        return subprocess.run(["java", "-jar", bu.JAR_PATH, "--exec", json.dumps(request), "--host", HOST, "--port",
+        return subprocess.run([*bu.client_argv(), "--exec", json.dumps(request), "--host", HOST, "--port",
                                str(port), "--user", ADMIN_USERNAME], cwd=cwd, capture_output=True, timeout=300,
                               env={**os.environ, "LWNRDB_PASSWORD": ADMIN_PASSWORD}, check=False)
 

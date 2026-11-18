@@ -44,7 +44,7 @@ def write_config(work_dir: str, port: int, **extra):
 
 
 def client(cwd: str, *args, port: int = SOURCE_PORT, stdin: bytes = b"", password=bu.PASSWORD):
-    command = ["java", "-jar", bu.JAR_PATH, *args, "--port", str(port)]
+    command = [*bu.client_argv(), *args, "--port", str(port)]
     if password is not None:
         command += ["--password", password]
     return subprocess.run(command, input=stdin, capture_output=True, cwd=cwd, timeout=CLIENT_TIMEOUT_S)
@@ -502,7 +502,7 @@ def test_exec_large_result_small_client_heap(cwd: str):
                 "objects": [{"_id": f"b{i:04d}", "body": f"{i}:" + "b" * BIG_ROW_BYTES}
                             for i in range(start, start + 40)]}), "OK")
     request = json.dumps({"type": "AGGREGATE", "databaseName": CRM, "collectionName": BIG, "aggregationSteps": []})
-    command = ["java", SMALL_CLIENT_HEAP, "-jar", bu.JAR_PATH, "--exec", request, "--port", str(SOURCE_PORT),
+    command = [*bu.client_argv(SMALL_CLIENT_HEAP), "--exec", request, "--port", str(SOURCE_PORT),
                "--password", bu.PASSWORD]
     result = subprocess.run(command, capture_output=True, cwd=cwd, timeout=CLIENT_TIMEOUT_S)
     check(f"--exec with {SMALL_CLIENT_HEAP} exits 0", result.returncode == 0, result.stderr.decode()[-500:])
